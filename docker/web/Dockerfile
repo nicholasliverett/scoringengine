@@ -9,6 +9,13 @@ RUN mkdir -p /var/uploads && chown -R engine:engine /var/uploads && \
 
 USER engine
 
+# Keep the web application code in this image instead of inheriting it only
+# from the base image.  The base image may be a previously published/stale tag
+# when Compose builds services in parallel or when an operator runs `up` with
+# an existing web image.  In particular, the readiness route is registered by
+# this source tree and must be present for the web healthcheck to succeed.
+COPY --chown=engine:engine scoring_engine /app/scoring_engine
+
 COPY bin/web /app/bin/web
 
 # nginx talks the uwsgi protocol on :5000.  The extra HTTP socket is bound to
