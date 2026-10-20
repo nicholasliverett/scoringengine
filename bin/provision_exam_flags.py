@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Create/reuse per-team exam flag files and register their hashes in Scoring Engine.
+"""Create/reuse per-team exam flag files and register their hashes in
+Scoring Engine.
 
 Inventory CSV columns: team_id,machine. Keep the output directory private and
 copy each generated text file to the matching student's workstation.
@@ -64,13 +65,35 @@ def http_error_detail(error):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-url", required=True, help="Scoring Engine URL, e.g. https://exam.example.edu")
-    parser.add_argument("--inventory", required=True, type=Path, help="CSV with team_id,machine columns")
-    parser.add_argument("--output-dir", required=True, type=Path, help="Private directory for flag files")
+    parser.add_argument(
+        "--base-url",
+        required=True,
+        help="Scoring Engine URL, e.g. https://exam.example.edu",
+    )
+    parser.add_argument(
+        "--inventory",
+        required=True,
+        type=Path,
+        help="CSV with team_id,machine columns",
+    )
+    parser.add_argument(
+        "--output-dir",
+        required=True,
+        type=Path,
+        help="Private directory for flag files",
+    )
     parser.add_argument("--username", required=True, help="White-team account")
     parser.add_argument("--password", help="White-team password (prompted if omitted)")
-    parser.add_argument("--rotate", action="store_true", help="Replace all listed flags with new credentials")
-    parser.add_argument("--allow-http", action="store_true", help="Allow sending admin credentials over plain HTTP")
+    parser.add_argument(
+        "--rotate",
+        action="store_true",
+        help="Replace all listed flags with new credentials",
+    )
+    parser.add_argument(
+        "--allow-http",
+        action="store_true",
+        help="Allow sending admin credentials over plain HTTP",
+    )
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/")
@@ -85,7 +108,8 @@ def main():
         for row in csv.DictReader(source):
             try:
                 team_id = int(row["team_id"])
-                machine = re.sub(r"[^A-Za-z0-9_.-]+", "-", row["machine"]).strip(".-_")
+                machine = re.sub(r"[^A-Za-z0-9_.-]+", "-", row["machine"])
+                machine = machine.strip(".-_")
             except (KeyError, TypeError, ValueError):
                 parser.error("inventory must have integer team_id and machine columns")
             if team_id < 1 or not machine:
@@ -137,48 +161,63 @@ def main():
         csrf_parser.feed(login_page)
         if not csrf_parser.token:
             raise RuntimeError("could not find login CSRF token")
-        form = urllib.parse.urlencode({
-            "csrf_token": csrf_parser.token,
-            "username": args.username,
-            "password": password,
-        }).encode()
-        request(opener, base_url + "/login", data=form, headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            # Flask-WTF requires a same-origin Referer for HTTPS POSTs.
-            "Referer": base_url + "/login",
-        })
+        form = urllib.parse.urlencode(
+            {
+                "csrf_token": csrf_parser.token,
+                "username": args.username,
+                "password": password,
+            }
+        ).encode()
+        request(
+            opener,
+            base_url + "/login",
+            data=form,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                # Flask-WTF requires a same-origin Referer for HTTPS POSTs.
+                "Referer": base_url + "/login",
+            },
+        )
         payload = json.dumps({"credentials": secrets_to_register, "rotate": args.rotate}).encode()
-        response = request(opener, base_url + "/api/admin/exam/credentials", data=payload, headers={
-            "Content-Type": "application/json",
-            "X-CSRFToken": csrf_parser.token,
-            "Referer": base_url + "/admin/status",
-        })
+        response = request(
+            opener,
+            base_url + "/api/admin/exam/credentials",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "X-CSRFToken": csrf_parser.token,
+                "Referer": base_url + "/admin/status",
+            },
+        )
         result = json.loads(response.read().decode("utf-8"))
         if response.status != 200:
             raise RuntimeError(result.get("error", "registration failed"))
     except urllib.error.HTTPError as exc:
         detail = http_error_detail(exc)
         suffix = f": {detail}" if detail else ""
-        print(f"Provisioning failed: HTTP {exc.code} {exc.reason}{suffix}", file=sys.stderr)
         print(
-            "Local flag files were written and may not be registered. Keep them private; "
-            "rerun with the same output directory after fixing the error. Use --rotate "
-            "only when intentionally replacing existing flags.",
+            f"Provisioning failed: HTTP {exc.code} {exc.reason}{suffix}",
+            file=sys.stderr,
+        )
+        print(
+            "Local flag files were written and may not be registered. Keep them "
+            "private; rerun with the same output directory after fixing the error. "
+            "Use --rotate only when intentionally replacing existing flags.",
             file=sys.stderr,
         )
         return 1
     except (urllib.error.URLError, RuntimeError, ValueError) as exc:
         print(f"Provisioning failed: {exc}", file=sys.stderr)
         print(
-            "Local flag files were written and may not be registered. Keep them private; "
-            "rerun with the same output directory after fixing the error. Use --rotate "
-            "only when intentionally replacing existing flags.",
+            "Local flag files were written and may not be registered. Keep them "
+            "private; rerun with the same output directory after fixing the error. "
+            "Use --rotate only when intentionally replacing existing flags.",
             file=sys.stderr,
         )
         return 1
 
     print(f"Provisioned {len(rows)} exam flag files in {args.output_dir}.")
-    print("Copy each team-<id>-<machine>.txt to that student's workstation and keep this export directory private.")
+    print("Copy each team-<id>-<machine>.txt to that student's workstation and " "keep this export directory private.")
     return 0
 
 
