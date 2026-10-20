@@ -127,14 +127,14 @@ def test_outputs_register_flag_hashes_and_create_team_targeted_salt_data(tmp_pat
     )
     salt_root = tmp_path / "out" / "salt"
     pillar_top = generator.yaml.safe_load((salt_root / "pillar" / "top.sls").read_text(encoding="utf-8"))
-    state_top = generator.yaml.safe_load((salt_root / "states" / "top.sls").read_text(encoding="utf-8"))
     generated_config = generator.yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
     blue_teams = [team for team in generated_config["teams"] if team["color"] == "Blue"]
 
     assert "G@ipv4:192.168.1.10" in pillar_top["base"]
     assert "G@ipv4:192.168.1.11" in pillar_top["base"]
-    assert "G@ipv4:192.168.1.10" in state_top["base"]
-    assert "G@ipv4:192.168.1.11" in state_top["base"]
+    state_path = salt_root / "states" / "practical_exam" / "install_exam_flag.sls"
+    assert state_path.is_file()
+    assert not (salt_root / "states" / "top.sls").exists()
     for team, row in zip(blue_teams, credentials):
         pillar = generator.yaml.safe_load(
             (salt_root / "pillar" / "practical_exam" / f"{team['name'].lower()}.sls").read_text(encoding="utf-8")
@@ -143,11 +143,22 @@ def test_outputs_register_flag_hashes_and_create_team_targeted_salt_data(tmp_pat
         assert pillar["practical_exam"]["ip"] == row["machine_ip"]
         assert pillar["practical_exam"]["flag_path"] == "/opt/exam/flag.txt"
         assert team["exam_flag_hash"] == hashlib.sha256(row["exam_flag"].encode("utf-8")).hexdigest()
-    assert "contents_pillar: practical_exam:flag" in (
-        salt_root / "states" / "practical_exam" / "install_exam_flag.sls"
-    ).read_text(encoding="utf-8")
+    assert "contents_pillar: practical_exam:flag" in state_path.read_text(encoding="utf-8")
     assert credentials_path.read_text(encoding="utf-8").splitlines()[0] == "team_name,username,password"
     assert all(row["exam_flag"] not in credentials_path.read_text(encoding="utf-8") for row in credentials)
+
+
+def test_force_removes_obsolete_state_top_file(tmp_path, source_data):
+    data, credentials, _ = generator.build_competition(source_data, 1, start_ip="192.168.1.10")
+    output_dir = tmp_path / "out"
+    state_root = output_dir / "salt" / "states"
+    state_root.mkdir(parents=True)
+    obsolete_state_top = state_root / "top.sls"
+    obsolete_state_top.write_text("old generated state top", encoding="utf-8")
+
+    generator.write_outputs(data, credentials, output_dir, force=True)
+
+    assert not obsolete_state_top.exists()
 
 
 @pytest.mark.parametrize("start_ip", ["not-an-ip", "::1", "255.255.255.255"])

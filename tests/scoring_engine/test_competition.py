@@ -4,6 +4,7 @@ import pytest
 
 from scoring_engine.competition import Competition
 from scoring_engine.db import db
+from scoring_engine.models.exam_credential import ExamCredential
 from scoring_engine.models.team import Team
 
 
@@ -406,3 +407,24 @@ class TestGoodSetupWithReject(CompetitionDataTest):
     def test_environment_without_reject(self):
         second_env = self.service.environments[1]
         assert second_env.matching_content_reject is None
+
+
+class TestExamFlagHash(CompetitionDataTest):
+    def test_saves_exam_flag_hash_for_first_blue_user(self):
+        token_hash = "a" * 64
+        self.competition_setup["teams"][0]["exam_flag_hash"] = token_hash
+
+        Competition(self.competition_setup).save()
+
+        team = db.session.query(Team).filter_by(name="Team1").one()
+        credential = db.session.query(ExamCredential).one()
+        assert credential.token_hash == token_hash
+        assert credential.team_id == team.id
+        assert credential.user_id == team.users[0].id
+
+    @pytest.mark.parametrize("token_hash", ["not-a-sha256", "A" * 64, None])
+    def test_rejects_invalid_exam_flag_hash(self, token_hash):
+        self.competition_setup["teams"][0]["exam_flag_hash"] = token_hash
+
+        with pytest.raises(AssertionError, match="exam_flag_hash must be a SHA-256 hex digest"):
+            Competition(self.competition_setup)

@@ -73,10 +73,9 @@ The output is private under `generated-exam/`:
   passwords.
 - `salt/pillar/top.sls` targets minions by their `ipv4` grain. Each
   `salt/pillar/practical_exam/teamN.sls` contains only that team's flag.
-- `salt/states/top.sls` and
-  `salt/states/practical_exam/install_exam_flag.sls` install the target team's
-  flag at `/tmp/exam-flag.txt` with read-only mode `0444`, so the assigned team
-  can submit it from its VM.
+- `salt/states/practical_exam/install_exam_flag.sls` installs the target
+  team's flag at `/tmp/exam-flag.txt` with read-only mode `0444`, so the
+  assigned team can submit it from its VM.
 
 The private output directory and secret files receive owner-only POSIX
 permissions where supported. Generated output is ignored by Git, and the
@@ -84,21 +83,27 @@ generator refuses to overwrite existing output unless `--force` is supplied.
 Use `--flag-path` if the VM's Salt-managed token file should be somewhere other
 than `/tmp/exam-flag.txt`.
 
-To apply the generated Salt data, add the generated `salt/pillar` directory to
-Salt's `pillar_roots` and `salt/states` directory to `file_roots`, then run:
+Put `salt/states/practical_exam/install_exam_flag.sls` under the master's
+configured state root (for example,
+`/srv/salt/practical_exam/install_exam_flag.sls`). Put the generated
+`salt/pillar/practical_exam/` directory under a configured pillar root and add
+the entries from the generated `salt/pillar/top.sls` to the pillar top file.
+The pillar top assigns each team's private flag to its VM. The state itself is
+applied directly by name, so no state top file is needed:
 
 ```sh
-salt '*' state.apply
+salt -C 'G@ipv4:192.168.1.10' state.apply practical_exam.install_exam_flag
 ```
 
-The generated top files match minions whose `ipv4` grain contains the assigned
-address, so each VM receives only its own flag. The template's SSH check logs in
-as `scoringcheck` and runs `id`; configure that account and password on every
-VM, or edit the service account in the template. Generated exam flags are
-registered when the generated `competition.yaml` is used to initialize the
-database. To use this config with a new database, copy it to
-`bin/competition.yaml` before the initial Compose setup. Config changes do not
-modify teams or services in an already initialized database.
+Replace the sample IP with the VM's address. To apply to all exam VMs in one
+command, target their minion IDs or use a compound expression matching the
+assigned IPs. The template's SSH check logs in as `scoringcheck` and runs `id`;
+configure that account and password on every VM, or edit the service account in
+the template. Generated exam flags are registered when the generated
+`competition.yaml` is used to initialize the database. To use this config with
+a new database, copy it to `bin/competition.yaml` before the initial Compose
+setup. Config changes do not modify teams or services in an already initialized
+database.
 
 For a live database, the legacy `bin/provision_exam_flags.py` flow remains
 available for deliberate flag registration or rotation. Its API flow requires

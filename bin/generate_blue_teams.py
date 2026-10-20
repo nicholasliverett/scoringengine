@@ -243,16 +243,11 @@ def write_salt_outputs(credentials, output_dir, flag_path=DEFAULT_FLAG_PATH, for
             directory.chmod(0o700)
 
     pillar_top = {"base": {}}
-    state_top = {"base": {}}
     for row in flagged_teams:
         minion_match = f"G@ipv4:{row['machine_ip']}"
         pillar_top["base"][minion_match] = [
             {"match": "compound"},
             f"practical_exam.{row['team_name'].lower()}",
-        ]
-        state_top["base"][minion_match] = [
-            {"match": "compound"},
-            "practical_exam.install_exam_flag",
         ]
         _dump_yaml(
             team_pillar_root / f"{row['team_name'].lower()}.sls",
@@ -267,7 +262,6 @@ def write_salt_outputs(credentials, output_dir, flag_path=DEFAULT_FLAG_PATH, for
         )
 
     _dump_yaml(pillar_root / "top.sls", pillar_top)
-    _dump_yaml(state_root / "top.sls", state_top)
     state_template = """{% set flag_path = salt['pillar.get']('practical_exam:flag_path', '/tmp/exam-flag.txt') %}
 install_exam_flag:
   file.managed:
@@ -277,6 +271,13 @@ install_exam_flag:
     - makedirs: True
 """
     _write_private_file(state_module_root / "install_exam_flag.sls", state_template)
+
+    # Older generated output included a state top file even though the exam
+    # installer is intended to be invoked directly with state.apply <sls>.
+    if force:
+        stale_state_top = state_root / "top.sls"
+        if stale_state_top.exists():
+            stale_state_top.unlink()
 
     # Remove stale generated team pillars when --force regenerates fewer teams.
     if force:
