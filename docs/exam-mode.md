@@ -7,13 +7,26 @@ submission records one participation event and awards the configured attendance
 credit. A database unique constraint and one transaction protect the award from
 concurrent or repeated submissions.
 
-Blue users see only Overview and Stats. These pages show their own points and
-anonymous Finding 1, Finding 2, etc. statuses from each check's latest result.
-They do not show service names or round-by-round check history. The public
+Blue users see the Overview page with their total points, service and threat
+check points, and each check's latest status. Check names can be shown or
+obscured in the competition configuration. The public
 scoreboard, service/check pages, injects, flags, team data, and their APIs are
 unavailable to Blue users. White accounts retain the normal password login and
 instructor pages. Service checks, scoring, and the configured check ports
 continue to operate on the server.
+
+Set `exam_display` on each service in `competition.yaml` to control its overview
+label and score category:
+
+- `name` shows the configured service name and counts its points under Services.
+- `finding` shows an anonymous `Finding N` label and counts its points under
+  Threats.
+- `threat` shows an anonymous `Threat N` label and counts its points under
+  Threats.
+
+The default is `finding`, which keeps existing configurations anonymous. The
+overview shows earned/max points for the total, each category, and every check;
+the total includes the configured attendance credit.
 
 ## Service scoring for the practical exam
 

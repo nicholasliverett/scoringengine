@@ -191,7 +191,7 @@ def create_app():
 
     @app.before_request
     def restrict_student_portal():
-        """Keep Blue exam users inside their private Overview and Stats portal."""
+        """Keep Blue exam users inside the exam overview."""
         if not current_user.is_authenticated or not current_user.is_blue_team:
             return None
         path = request.path

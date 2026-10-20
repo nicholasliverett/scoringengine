@@ -146,6 +146,13 @@ class Competition(dict):
         assert "name" in service, "{0} service must have a 'name' field".format(team_name)
         assert type(service["name"]) is str, "{0} service 'name' must be a string".format(team_name)
 
+        exam_display = service.get("exam_display", "finding")
+        assert isinstance(exam_display, str) and exam_display in ("name", "finding", "threat"), (
+            "{0} {1} service 'exam_display' must be one of 'name', 'finding', or 'threat'".format(
+                team_name, service["name"]
+            )
+        )
+
         # Verify service check_name
         assert "check_name" in service, "{0} {1} service must have a 'check_name' field".format(
             team_name, service["name"]
@@ -306,6 +313,7 @@ class Competition(dict):
                     logger.info("\tCreating {0} Service".format(service_dict["name"]))
                     service_obj = Service(
                         name=service_dict["name"],
+                        exam_display=service_dict.get("exam_display", "finding"),
                         team=team_obj,
                         check_name=service_dict["check_name"],
                         host=service_dict["host"],

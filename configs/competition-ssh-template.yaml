@@ -20,6 +20,7 @@ teams:
         password: replaced-by-generator
     services:
       - name: SSH
+        exam_display: name
         check_name: SSHCheck
         host: "192.168.1.{team_number}"
         port: 22

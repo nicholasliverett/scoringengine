@@ -185,7 +185,7 @@
               <li class="nav-item"><a class="nav-link {% if request.path == '/injects' or request.path.startswith('/inject') %}active{% endif %}"
                   href="{{ url_for('injects.home') }}">Injects</a></li>
               {% endif %}
-              {% if current_user.is_blue_team or current_user.is_white_team %}
+              {% if current_user.is_white_team %}
               <li class="nav-item"><a class="nav-link {% if request.path == '/stats' %}active{% endif %}"
                   href="{{ url_for('stats.home') }}">Stats</a></li>
               {% endif %}

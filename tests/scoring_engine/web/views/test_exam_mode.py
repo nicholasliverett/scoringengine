@@ -36,7 +36,7 @@ def test_flag_login_reuses_credential_but_awards_once(test_client, db_session):
             follow_redirects=True,
         )
         assert response.status_code == 200
-        assert b"Your Exam Points" in response.data
+        assert b"Overview" in response.data
         if attempt == 0:
             test_client.get("/logout")
 
@@ -45,20 +45,27 @@ def test_flag_login_reuses_credential_but_awards_once(test_client, db_session):
     assert adjustment.points == 100
     assert adjustment.reason == "Exam participation"
     summary = test_client.get("/api/exam/summary").get_json()
-    assert summary["participation_awarded"] is True
     assert summary["participation_points"] == 100
     assert summary["total"] == 100
+    assert summary["total_max"] == 100
+    assert summary["attendance_max"] == 100
 
 
-def test_exam_stats_show_latest_anonymized_finding_status_only(blue_login, db_session):
+def test_exam_stats_show_configured_labels_and_latest_check_scores(blue_login, db_session):
     from tests.scoring_engine.factories import make_check, make_round
     from scoring_engine.scores import materialize_round
 
     client, teams = blue_login
     team = teams["blue_team"]
-    service = Service(name="Sensitive SSH Check", team=team, check_name="SSHCheck", host="exam-host", points=125)
-    failed_service = Service(name="Sensitive Beacon Check", team=team, check_name="AgentCheck", host="exam-host", points=25)
-    unchecked_service = Service(name="Sensitive User Check", team=team, check_name="AgentCheck", host="exam-host", points=30)
+    service = Service(
+        name="Sensitive SSH Check", exam_display="name", team=team, check_name="SSHCheck", host="exam-host", points=125
+    )
+    failed_service = Service(
+        name="Sensitive Beacon Check", exam_display="threat", team=team, check_name="AgentCheck", host="exam-host", points=25
+    )
+    unchecked_service = Service(
+        name="Sensitive User Check", team=team, check_name="AgentCheck", host="exam-host", points=30
+    )
     db.session.add(service)
     db.session.add(failed_service)
     db.session.add(unchecked_service)
@@ -76,14 +83,17 @@ def test_exam_stats_show_latest_anonymized_finding_status_only(blue_login, db_se
     assert "rounds" not in data
     assert data["service"] == 125
     assert data["total"] == 125
+    assert data["service_points"] == {"earned": 125, "max": 125}
+    assert data["threat_points"] == {"earned": 0, "max": 55}
+    assert data["total_max"] == 280
     assert data["findings_passing"] == 1
-    assert data["findings"] == [
-        {"name": "Finding 1", "passing": True},
-        {"name": "Finding 2", "passing": False},
-        {"name": "Finding 3", "passing": None},
+    assert [(row["name"], row["category"], row["passing"], row["points_earned"], row["points_max"])
+            for row in data["findings"]] == [
+        ("Sensitive SSH Check", "service", True, 125, 125),
+        ("Threat 1", "threat", False, 0, 25),
+        ("Finding 1", "threat", None, 0, 30),
     ]
     response_text = response.get_data(as_text=True)
-    assert "Sensitive SSH Check" not in response_text
     assert "Sensitive Beacon Check" not in response_text
     assert "Sensitive User Check" not in response_text
 
@@ -140,11 +150,10 @@ def test_blue_portal_hides_scoreboard_and_service_apis(blue_login):
     overview = client.get("/overview")
     stats = client.get("/stats")
     assert overview.status_code == 200
-    assert stats.status_code == 200
-    assert b"Latest finding status" in overview.data
-    assert b"Latest finding status" in stats.data
-    assert b"Your Point History" not in stats.data
-    assert b"exam-rounds" not in stats.data
+    assert stats.status_code == 302
+    assert stats.headers["Location"].endswith("/overview")
+    assert b"Latest Check Status" in overview.data
+    assert b"Stats</a>" not in overview.data
     assert client.get("/scoreboard").status_code == 302
     assert client.get("/services").status_code == 302
     assert client.get("/api/scoreboard/get_bar_data").status_code == 404
@@ -194,5 +203,6 @@ def test_flag_provisioning_is_white_only_and_hashes_are_stored(test_client, thre
 def test_white_users_keep_instructor_score_views(white_login):
     client, _ = white_login
     assert client.get("/scoreboard").status_code == 200
+    assert client.get("/stats").status_code == 200
     assert client.get("/api/scoreboard/get_bar_data").status_code == 200
     assert client.get("/api/overview/get_columns").status_code == 200

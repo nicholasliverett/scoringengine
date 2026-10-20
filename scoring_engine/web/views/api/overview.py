@@ -1,10 +1,12 @@
 from collections import defaultdict
+from datetime import timedelta
 
 from flask import abort, jsonify, request
 from flask_login import current_user
 from sqlalchemy.sql import func
 
 from scoring_engine.cache import cache
+from scoring_engine.datetime_utils import ensure_utc_aware
 from scoring_engine.db import db
 from scoring_engine.models.check import Check
 from scoring_engine.models.round import Round
@@ -116,7 +118,6 @@ def _get_overview_data_cached(anonymize, show_both):
 
 
 @mod.route("/api/overview/get_round_data")
-@cache.memoize()
 def overview_get_round_data():
     round_obj = db.session.query(Round).order_by(Round.number.desc()).first()
     if round_obj:
@@ -126,7 +127,34 @@ def overview_get_round_data():
         round_start = ""
         number = 0
     engine_paused = Setting.get_setting("engine_paused").value
-    data = {"round_start": round_start, "number": number, "engine_paused": engine_paused}
+    next_round_at = None
+    if engine_paused:
+        next_round_status = "paused"
+    elif round_obj is None:
+        next_round_status = "waiting"
+    elif round_obj.round_end is None:
+        next_round_status = "running"
+    else:
+        target_round_time = Setting.get_setting("target_round_time")
+        try:
+            interval = int(target_round_time.value) if target_round_time else 0
+        except (TypeError, ValueError):
+            interval = 0
+        if interval <= 0:
+            next_round_status = "unknown"
+        else:
+            next_round_start = ensure_utc_aware(round_obj.round_start) + timedelta(seconds=interval)
+            round_end = ensure_utc_aware(round_obj.round_end)
+            next_round_at = max(next_round_start, round_end).isoformat()
+            next_round_status = "scheduled"
+
+    data = {
+        "round_start": round_start,
+        "number": number,
+        "engine_paused": engine_paused,
+        "next_round_at": next_round_at,
+        "next_round_status": next_round_status,
+    }
     return jsonify(data)
 
 

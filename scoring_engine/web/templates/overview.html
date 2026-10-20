@@ -3,35 +3,78 @@
 {% block content %}
 <div class="page-wrap">
     {% if current_user.is_blue_team %}
-    <div class="page-title-bar"><h1 class="page-title">Your Exam Points</h1><span class="page-subtitle">Private score summary</span></div>
+    <div class="page-title-bar"><h1 class="page-title">Overview</h1></div>
     <div class="stat-cards-row">
-        <div class="stat-card"><div class="stat-label">Total points</div><div class="stat-value" id="exam-total">—</div></div>
-        <div class="stat-card"><div class="stat-label">Service points</div><div class="stat-value" id="exam-service">—</div></div>
-        <div class="stat-card"><div class="stat-label">Attendance credit</div><div class="stat-value" id="exam-attendance">—</div><div class="stat-detail" id="exam-attendance-status">Loading</div></div>
-        <div class="stat-card"><div class="stat-label">Checks passing</div><div class="stat-value" id="exam-findings-count">-</div></div>
+        <div class="stat-card"><div class="stat-label">Total points</div><div class="stat-value" id="exam-total">—</div><div class="stat-detail">Attendance credit is included</div></div>
+        <div class="stat-card"><div class="stat-label">Service check points</div><div class="stat-value" id="exam-service">—</div></div>
+        <div class="stat-card"><div class="stat-label">Threat check points</div><div class="stat-value" id="exam-threat">—</div></div>
     </div>
-    <p class="text-muted">Your scores are private to your team.</p>
-    <h2 class="section-header">Latest finding status</h2>
-    <p class="text-muted">A checkmark means the latest check passes; for a threat check, that should mean the threat is gone. An X means it is still failing.</p>
+    <div id="exam-next-check" class="alert alert-info" role="status">Loading engine check schedule…</div>
+    <h2 class="section-header">Latest Check Status</h2>
+    <p class="text-muted">Service checks verify availability. Threat checks pass when the threat condition is gone. Points show earned out of the maximum for each check; results update after the next completed engine check.</p>
     <div class="chart-card" style="padding:0; overflow:hidden;">
         <table class="table table-sm overview-matrix mb-0">
-            <thead><tr><th>Finding</th><th>Status</th></tr></thead>
-            <tbody id="exam-findings-body"><tr><td colspan="2" class="text-muted">Loading</td></tr></tbody>
+            <thead><tr><th>Type</th><th>Check</th><th>Status</th><th>Points</th><th>What this means</th></tr></thead>
+            <tbody id="exam-findings-body"><tr><td colspan="5" class="text-muted">Loading</td></tr></tbody>
         </table>
     </div>
     <script>
+      var examNextRoundAt = null;
+      var examNextRoundStatus = 'waiting';
+      var examCurrentRound = 0;
+
+      function renderNextCheck() {
+        var message;
+        if (examNextRoundStatus === 'paused') {
+          message = 'The engine is paused. Checks will resume when the engine is unpaused.';
+        } else if (examNextRoundStatus === 'running') {
+          message = 'The engine is running round ' + examCurrentRound + '. The next check time will appear when this round finishes.';
+        } else if (examNextRoundStatus === 'waiting') {
+          message = 'Waiting for the engine to start its first check round.';
+        } else if (examNextRoundStatus !== 'scheduled' || !examNextRoundAt) {
+          message = 'The next check time is currently unavailable.';
+        } else {
+          var next = new Date(examNextRoundAt);
+          if (Number.isNaN(next.getTime())) {
+            message = 'The next check time is currently unavailable.';
+          } else {
+            var seconds = Math.max(0, Math.ceil((next.getTime() - Date.now()) / 1000));
+            var when = next.toLocaleString([], { dateStyle: 'short', timeStyle: 'medium' });
+            if (seconds === 0) {
+              message = 'The next check round was expected at ' + when + ' and is due to start.';
+            } else {
+              var minutes = Math.floor(seconds / 60);
+              var remainingSeconds = seconds % 60;
+              var countdown = minutes > 0 ? minutes + 'm ' + remainingSeconds + 's' : remainingSeconds + 's';
+              message = 'Next check round expected at ' + when + ' (about ' + countdown + ').';
+            }
+          }
+        }
+        ScoringEngineUtils.setText(document.getElementById('exam-next-check'), message);
+      }
+
+      function refreshNextCheck() {
+        $.getJSON('/api/overview/get_round_data').done(function(data) {
+          examNextRoundAt = data.next_round_at;
+          examNextRoundStatus = data.next_round_status;
+          examCurrentRound = data.number || 0;
+          renderNextCheck();
+        });
+      }
+
       function refreshExamSummary() {
         $.getJSON('/api/exam/summary').done(function(data) {
-          $('#exam-total').text(Number(data.total).toLocaleString());
-          $('#exam-service').text(Number(data.service).toLocaleString());
-          $('#exam-attendance').text(Number(data.participation_points).toLocaleString());
-          $('#exam-attendance-status').text(data.participation_awarded ? 'Participation recorded' : 'Not recorded');
+          function formatScore(earned, maximum) {
+            return Number(earned || 0).toLocaleString() + ' / ' + Number(maximum || 0).toLocaleString();
+          }
+          $('#exam-total').text(formatScore(data.total, data.total_max));
+          $('#exam-service').text(formatScore(data.service_points.earned, data.service_points.max));
+          $('#exam-threat').text(formatScore(data.threat_points.earned, data.threat_points.max));
 
           var findings = data.findings || [];
-          $('#exam-findings-count').text(Number(data.findings_passing || 0) + ' / ' + findings.length);
           var $body = $('#exam-findings-body').empty();
           if (findings.length === 0) {
-            $body.append($('<tr>').append($('<td>').attr('colspan', 2).addClass('text-muted').text('No findings configured')));
+            $body.append($('<tr>').append($('<td>').attr('colspan', 5).addClass('text-muted').text('No checks configured')));
             return;
           }
           findings.forEach(function(finding) {
@@ -45,12 +88,25 @@
             }
             var $status = $('<span>').addClass(className).text(label);
             $status.prepend($('<i>').addClass('bi ' + icon + ' me-1').attr('aria-hidden', 'true'));
-            $body.append($('<tr>').append($('<td>').text(finding.name)).append($('<td>').append($status)));
+            $body.append($('<tr>')
+              .append($('<td>').text(finding.category_label))
+              .append($('<td>').text(finding.name))
+              .append($('<td>').append($status))
+              .append($('<td>').text(formatScore(finding.points_earned, finding.points_max)))
+              .append($('<td>').text(finding.guidance || '')));
           });
         });
       }
       refreshExamSummary();
-      ScoringEngineSSE.on('round_complete', refreshExamSummary);
+      refreshNextCheck();
+      setInterval(renderNextCheck, 1000);
+      setInterval(refreshNextCheck, 15000);
+      setInterval(refreshExamSummary, 30000);
+      ScoringEngineSSE.on('round_complete', function() {
+        refreshExamSummary();
+        refreshNextCheck();
+      });
+      ScoringEngineSSE.on('settings_changed', refreshNextCheck);
     </script>
     {% else %}
     <!-- Page title bar -->

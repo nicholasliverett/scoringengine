@@ -8,6 +8,7 @@ from flask_login import current_user, login_required
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import func
 
+from scoring_engine.config import config
 from scoring_engine.db import db
 from scoring_engine.models.check import Check
 from scoring_engine.models.exam_credential import ExamCredential
@@ -48,11 +49,7 @@ def _own_score(team_id):
 
 
 def _own_findings(team_id):
-    """Return only the latest completed status for each of this team's checks.
-
-    Service names and check details are intentionally hidden from Blue users.
-    The ordinal labels are stable because their services are ordered by ID.
-    """
+    """Return latest check status and score breakdown for one team's services."""
     latest_checks = (
         db.session.query(Check.service_id, func.max(Check.id).label("check_id"))
         .filter(Check.completed.is_(True))
@@ -60,7 +57,7 @@ def _own_findings(team_id):
         .subquery()
     )
     rows = (
-        db.session.query(Check.result)
+        db.session.query(Service.name, Service.exam_display, Service.port, Service.points, Check.result)
         .select_from(Service)
         .outerjoin(latest_checks, latest_checks.c.service_id == Service.id)
         .outerjoin(Check, Check.id == latest_checks.c.check_id)
@@ -68,11 +65,77 @@ def _own_findings(team_id):
         .order_by(Service.id)
         .all()
     )
-    findings = [
-        {"name": f"Finding {index}", "passing": None if row[0] is None else bool(row[0])}
-        for index, row in enumerate(rows, start=1)
-    ]
-    return findings, sum(finding["passing"] is True for finding in findings)
+    label_counts = {"finding": 0, "threat": 0}
+    score_totals = {
+        "service": {"earned": 0, "max": 0},
+        "threat": {"earned": 0, "max": 0},
+    }
+    findings = []
+    for service_name, exam_display, port, service_points, result in rows:
+        if exam_display not in label_counts and exam_display != "name":
+            exam_display = "finding"
+
+        category = "service" if exam_display == "name" else "threat"
+        category_label = "Service" if category == "service" else "Threat"
+        if exam_display == "name":
+            label = service_name
+        else:
+            label_counts[exam_display] += 1
+            label = f"{exam_display.title()} {label_counts[exam_display]}"
+
+        passing = None if result is None else bool(result)
+        if passing is None:
+            guidance = "The engine has not completed a check yet."
+        elif passing:
+            guidance = (
+                "The service passed its availability check."
+                if category == "service"
+                else "The check did not detect the threat condition."
+            )
+        elif category == "service":
+            port_text = f" on port {port}" if port else ""
+            guidance = f"The service check failed. Verify it is running and reachable{port_text}."
+        else:
+            guidance = "The threat condition is still present; remove it before the next check."
+
+        maximum = max(0, int(service_points or 0))
+        earned = maximum if passing is True else 0
+        score_totals[category]["max"] += maximum
+        score_totals[category]["earned"] += earned
+        findings.append(
+            {
+                "name": label,
+                "category": category,
+                "category_label": category_label,
+                "passing": passing,
+                "points_earned": earned,
+                "points_max": maximum,
+                "guidance": guidance,
+            }
+        )
+    return findings, sum(finding["passing"] is True for finding in findings), score_totals
+
+
+def _own_exam_summary(team_id):
+    from scoring_engine.models.exam_credential import ExamParticipation
+
+    points = _own_score(team_id)
+    participation = db.session.query(ExamParticipation).filter_by(team_id=team_id).one_or_none()
+    participation_points = int(participation.score_adjustment.points) if participation else 0
+    findings, passing, category_scores = _own_findings(team_id)
+    attendance_max = max(0, int(config.exam_participation_points))
+    points.update(
+        {
+            "participation_points": participation_points,
+            "attendance_max": attendance_max,
+            "total_max": category_scores["service"]["max"] + category_scores["threat"]["max"] + attendance_max,
+            "service_points": category_scores["service"],
+            "threat_points": category_scores["threat"],
+            "findings": findings,
+            "findings_passing": passing,
+        }
+    )
+    return points
 
 
 @mod.route("/api/exam/summary")
@@ -80,14 +143,7 @@ def _own_findings(team_id):
 def exam_summary():
     if not current_user.is_blue_team:
         return jsonify({"error": "forbidden"}), 403
-    from scoring_engine.models.exam_credential import ExamParticipation
-
-    points = _own_score(current_user.team_id)
-    participation = db.session.query(ExamParticipation).filter_by(team_id=current_user.team_id).one_or_none()
-    points["participation_awarded"] = participation is not None
-    points["participation_points"] = participation.score_adjustment.points if participation else 0
-    points["findings"], points["findings_passing"] = _own_findings(current_user.team_id)
-    return jsonify(points)
+    return jsonify(_own_exam_summary(current_user.team_id))
 
 
 @mod.route("/api/exam/stats")
@@ -95,13 +151,7 @@ def exam_summary():
 def exam_stats():
     if not current_user.is_blue_team:
         return jsonify({"error": "forbidden"}), 403
-    from scoring_engine.models.exam_credential import ExamParticipation
-
-    score = _own_score(current_user.team_id)
-    participation = db.session.query(ExamParticipation).filter_by(team_id=current_user.team_id).one_or_none()
-    score["participation_points"] = participation.score_adjustment.points if participation else 0
-    score["findings"], score["findings_passing"] = _own_findings(current_user.team_id)
-    return jsonify(score)
+    return jsonify(_own_exam_summary(current_user.team_id))
 
 
 @mod.route("/api/admin/exam/credentials", methods=["POST"])

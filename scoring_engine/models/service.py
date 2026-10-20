@@ -31,6 +31,8 @@ class Service(Base):
     __tablename__ = "services"
     id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False)
+    # Blue-team exam overview label: service name, Finding N, or Threat N.
+    exam_display = Column(String(16), nullable=False, default="finding", server_default="finding")
     check_name = Column(String(100), nullable=False)
     team_id = Column(Integer, ForeignKey("teams.id"))
     team = relationship("Team", back_populates="services", lazy="joined")
