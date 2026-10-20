@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -96,6 +97,63 @@ def test_host_number_offset_maps_team1_to_tenth_host(source_data):
     assert [team["services"][0]["host"] for team in blue_teams] == [
         f"192.168.1.{number}" for number in range(10, 15)
     ]
+
+
+def test_start_ip_assigns_consecutive_hosts_and_per_team_exam_flags(source_data):
+    result, credentials, host_count = generator.build_competition(source_data, 3, "TemplateBlue", start_ip="192.168.1.10")
+
+    blue_teams = [team for team in result["teams"] if team["color"] == "Blue"]
+    assert [team["services"][0]["host"] for team in blue_teams] == [
+        "192.168.1.10",
+        "192.168.1.11",
+        "192.168.1.12",
+    ]
+    assert [team["services"][1]["host"] for team in blue_teams] == [
+        "192.168.1.10",
+        "192.168.1.11",
+        "192.168.1.12",
+    ]
+    assert host_count == 2
+    assert [row["machine_ip"] for row in credentials] == ["192.168.1.10", "192.168.1.11", "192.168.1.12"]
+    assert len({row["exam_flag"] for row in credentials}) == 3
+    for team, row in zip(blue_teams, credentials):
+        assert team["exam_flag_hash"] == hashlib.sha256(row["exam_flag"].encode("utf-8")).hexdigest()
+
+
+def test_outputs_register_flag_hashes_and_create_team_targeted_salt_data(tmp_path, source_data):
+    data, credentials, _ = generator.build_competition(source_data, 2, "TemplateBlue", start_ip="192.168.1.10")
+    yaml_path, credentials_path = generator.write_outputs(
+        data, credentials, tmp_path / "out", flag_path="/opt/exam/flag.txt"
+    )
+    salt_root = tmp_path / "out" / "salt"
+    pillar_top = generator.yaml.safe_load((salt_root / "pillar" / "top.sls").read_text(encoding="utf-8"))
+    state_top = generator.yaml.safe_load((salt_root / "states" / "top.sls").read_text(encoding="utf-8"))
+    generated_config = generator.yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    blue_teams = [team for team in generated_config["teams"] if team["color"] == "Blue"]
+
+    assert "G@ipv4:192.168.1.10" in pillar_top["base"]
+    assert "G@ipv4:192.168.1.11" in pillar_top["base"]
+    assert "G@ipv4:192.168.1.10" in state_top["base"]
+    assert "G@ipv4:192.168.1.11" in state_top["base"]
+    for team, row in zip(blue_teams, credentials):
+        pillar = generator.yaml.safe_load(
+            (salt_root / "pillar" / "practical_exam" / f"{team['name'].lower()}.sls").read_text(encoding="utf-8")
+        )
+        assert pillar["practical_exam"]["flag"] == row["exam_flag"]
+        assert pillar["practical_exam"]["ip"] == row["machine_ip"]
+        assert pillar["practical_exam"]["flag_path"] == "/opt/exam/flag.txt"
+        assert team["exam_flag_hash"] == hashlib.sha256(row["exam_flag"].encode("utf-8")).hexdigest()
+    assert "contents_pillar: practical_exam:flag" in (
+        salt_root / "states" / "practical_exam" / "install_exam_flag.sls"
+    ).read_text(encoding="utf-8")
+    assert credentials_path.read_text(encoding="utf-8").splitlines()[0] == "team_name,username,password"
+    assert all(row["exam_flag"] not in credentials_path.read_text(encoding="utf-8") for row in credentials)
+
+
+@pytest.mark.parametrize("start_ip", ["not-an-ip", "::1", "255.255.255.255"])
+def test_rejects_invalid_or_overflowing_ip_range(source_data, start_ip):
+    with pytest.raises(ValueError, match="starting IP|exceed the IPv4 range"):
+        generator.build_competition(source_data, 2, start_ip=start_ip)
 
 
 def test_included_ssh_template_generates_requested_five_hosts():

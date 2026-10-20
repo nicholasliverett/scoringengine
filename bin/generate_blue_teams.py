@@ -95,7 +95,7 @@ def build_competition(source_data, count, template_team_name=None, host_number_o
         except ipaddress.AddressValueError as error:
             raise ValueError("starting IP must be a valid IPv4 address") from error
         last_ip = int(first_ip) + count - 1
-        if last_ip > int(ipaddress.IPv4Address.max):
+        if last_ip > int(ipaddress.IPv4Address("255.255.255.255")):
             raise ValueError(f"{count} consecutive team IPs from {first_ip} exceed the IPv4 range")
         team_ips = [str(ipaddress.IPv4Address(int(first_ip) + offset)) for offset in range(count)]
     if not isinstance(source_data, dict) or not isinstance(source_data.get("teams"), list):
@@ -128,6 +128,12 @@ def build_competition(source_data, count, template_team_name=None, host_number_o
     for index, service in enumerate(template_services, start=1):
         if not isinstance(service, dict) or not isinstance(service.get("host"), str):
             raise ValueError(f"template team '{template_team['name']}' service {index} must have a host string")
+    if team_ips is not None:
+        templated_host_count = len(template_services)
+    else:
+        templated_host_count = sum(
+            any(token in service["host"] for token in HOST_TOKENS) for service in template_services
+        )
 
     preserved_teams = [
         team for team in source_data["teams"] if not isinstance(team, dict) or team.get("color") != "Blue"
@@ -148,7 +154,6 @@ def build_competition(source_data, count, template_team_name=None, host_number_o
     used_passwords = set()
     generated_teams = []
     credentials = []
-    templated_host_count = 0
 
     for number, team_name in enumerate(generated_names, start=1):
         username = generate_username(number, used_usernames)
@@ -165,9 +170,7 @@ def build_competition(source_data, count, template_team_name=None, host_number_o
             original_host = service.get("host")
             if team_ips is not None:
                 service["host"] = team_ips[number - 1]
-                templated_host_count += 1
             elif isinstance(original_host, str) and any(token in original_host for token in HOST_TOKENS):
-                templated_host_count += 1
                 service["host"] = render_host(original_host, number, team_name, host_number_offset)
             else:
                 service["host"] = render_host(original_host, number, team_name, host_number_offset)
