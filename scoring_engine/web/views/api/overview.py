@@ -173,71 +173,38 @@ def overview_get_data():
     sla_penalties_row = ["SLA Penalties"]
 
     num_up_services = dict(
-        db.session.query(
-            Service.team_id,
-            func.count(Service.team_id),
-        )
-        .join(Check)
-        .join(Round)
-        .filter(Check.result.is_(True))
-        .filter(Round.number == last_round)
-        .group_by(Service.team_id)
-        .all()
+        db.session.query(Service.team_id, func.count(Service.team_id))
+        .filter(Service.scoring_up.is_(True))
+        .group_by(Service.team_id).all()
     )
 
     num_down_services = dict(
-        db.session.query(
-            Service.team_id,
-            func.count(Service.team_id),
-        )
-        .join(Check)
-        .join(Round)
-        .filter(Check.result.is_(False))
-        .filter(Round.number == last_round)
-        .group_by(Service.team_id)
-        .all()
+        db.session.query(Service.team_id, func.count(Service.team_id))
+        .filter(Service.scoring_up.is_(False))
+        .group_by(Service.team_id).all()
     )
 
     if len(blue_team_ids) > 0:
-        # Team service scores (with dynamic multipliers when enabled) from the
-        # materialized round_score table -- no full-history scan per render.
-        from scoring_engine.scores import team_penalties, team_service_scores
+        # Team scores reflect the latest service state, with no round accumulation.
+        from scoring_engine.scores import team_service_scores
 
         from . import get_effective_freeze
 
         _, freeze_time = get_effective_freeze()
         team_scores = team_service_scores(db.session, sla_config, freeze_time=freeze_time)
-        # All teams' penalties in a couple of grouped queries (see scores.team_penalties).
-        penalties = team_penalties(db.session, sla_config) if sla_config.sla_enabled else {}
-
-        # Calculate adjusted scores with SLA penalties
         adjusted_scores_dict = {}
         penalties_dict = {}
         for blue_team_id in blue_team_ids:
-            base_score = team_scores.get(blue_team_id, 0)
-            if sla_config.sla_enabled:
-                penalty = penalties.get(blue_team_id, 0)
-                penalties_dict[blue_team_id] = penalty
-                if sla_config.allow_negative:
-                    adjusted_scores_dict[blue_team_id] = base_score - penalty
-                else:
-                    adjusted_scores_dict[blue_team_id] = max(0, base_score - penalty)
-            else:
-                penalties_dict[blue_team_id] = 0
-                adjusted_scores_dict[blue_team_id] = base_score
+            penalties_dict[blue_team_id] = 0
+            adjusted_scores_dict[blue_team_id] = team_scores.get(blue_team_id, 0)
 
-        # Use adjusted scores for ranking when SLA is enabled
-        scores_for_ranking = adjusted_scores_dict if sla_config.sla_enabled else team_scores
+        scores_for_ranking = team_scores
 
         # Calculate ranks with tie handling
         ranks_dict = calculate_ranks(scores_for_ranking)
 
         for blue_team_id in blue_team_ids:
-            # Show adjusted score when SLA is enabled, base score otherwise
-            if sla_config.sla_enabled:
-                current_scores.append(str(adjusted_scores_dict.get(blue_team_id, 0)))
-            else:
-                current_scores.append(str(team_scores.get(blue_team_id, 0)))
+            current_scores.append(str(team_scores.get(blue_team_id, 0)))
             current_places.append(str(ranks_dict.get(blue_team_id, 0)))
             # Up and down counts as separate rows so each cell holds a single
             # value -- a combined "up / down" wraps in a narrow team column and
@@ -250,9 +217,6 @@ def overview_get_data():
 
         data.append(current_scores)
         data.append(current_places)
-        # Show SLA penalties row when SLA is enabled
-        if sla_config.sla_enabled:
-            data.append(sla_penalties_row)
         data.append(services_up)
         data.append(services_down)
 

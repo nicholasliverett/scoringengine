@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 
 from scoring_engine.db import db
 from scoring_engine.models.check import Check
@@ -68,31 +68,30 @@ class TestTeam:
         team = generate_sample_model_tree("Team", db.session)
         # Checks always belong to a round in production (the engine creates them
         # inside one); build them that way so current_score, now read from the
-        # round_score materialization, reflects them. (The conftest autouse
-        # fixture keeps round_score in sync for the read.)
+        # state snapshot materialization, reflects them.
         round_1 = Round(number=1)
         round_2 = Round(number=2)
         db.session.add_all([round_1, round_2])
         service_1 = Service(name="Example Service 1", team=team, check_name="ICMP IPv4 Check", host="127.0.0.1")
         db.session.add(service_1)
-        db.session.add(Check(service=service_1, result=True, output="Good output", round=round_1))
+        db.session.add(Check(completed=True, service=service_1, result=True, output="Good output", round=round_1))
         service_2 = Service(name="Example Service 2", team=team, check_name="SSH IPv4 Check", host="127.0.0.2")
         db.session.add(service_2)
-        db.session.add(Check(service=service_2, result=True, output="Good output", round=round_1))
-        db.session.add(Check(service=service_2, result=True, output="Good output", round=round_2))
+        db.session.add(Check(completed=True, service=service_2, result=True, output="Good output", round=round_1))
+        db.session.add(Check(completed=True, service=service_2, result=True, output="Good output", round=round_2))
         service_3 = Service(name="Example Service 3", team=team, check_name="SSH IPv4 Check", host="127.0.0.3")
         db.session.add(service_3)
-        db.session.add(Check(service=service_3, result=False, output="bad output", round=round_1))
+        db.session.add(Check(completed=True, service=service_3, result=False, output="bad output", round=round_1))
         db.session.commit()
         materialize_all_rounds(db.session)
-        assert team.current_score == 300
+        assert team.current_score == 200
 
     def test_place(self):
         from scoring_engine.models.round import Round
         from scoring_engine.scores import materialize_all_rounds
 
         # Checks always belong to a round in production; build them that way so
-        # round_score (which place reads) reflects them.
+        # state snapshots (which place reads) reflect them.
         round_1 = Round(number=1)
         round_2 = Round(number=2)
         db.session.add_all([round_1, round_2])
@@ -101,22 +100,22 @@ class TestTeam:
         db.session.add(team_1)
         service_1 = Service(name="Example Service 1", team=team_1, check_name="ICMP IPv4 Check", host="127.0.0.1")
         db.session.add(service_1)
-        db.session.add(Check(service=service_1, result=True, output="Good output", round=round_1))
-        db.session.add(Check(service=service_1, result=True, output="Good output", round=round_2))
+        db.session.add(Check(completed=True, service=service_1, result=True, output="Good output", round=round_1))
+        db.session.add(Check(completed=True, service=service_1, result=True, output="Good output", round=round_2))
 
         team_2 = Team(name="Blue Team 2", color="Blue")
         db.session.add(team_2)
         service_2 = Service(name="Example Service 1", team=team_2, check_name="ICMP IPv4 Check", host="127.0.0.1")
         db.session.add(service_2)
-        db.session.add(Check(service=service_2, result=True, output="Good output", round=round_1))
-        db.session.add(Check(service=service_2, result=True, output="Good output", round=round_2))
+        db.session.add(Check(completed=True, service=service_2, result=True, output="Good output", round=round_1))
+        db.session.add(Check(completed=True, service=service_2, result=True, output="Good output", round=round_2))
 
         team_3 = Team(name="Blue Team 3", color="Blue")
         db.session.add(team_3)
         service_3 = Service(name="Example Service 1", team=team_3, check_name="ICMP IPv4 Check", host="127.0.0.1")
         db.session.add(service_3)
-        db.session.add(Check(service=service_3, result=True, output="Good output", round=round_1))
-        db.session.add(Check(service=service_3, result=False, output="Bad output", round=round_2))
+        db.session.add(Check(completed=True, service=service_3, result=True, output="Good output", round=round_1))
+        db.session.add(Check(completed=True, service=service_3, result=False, output="Bad output", round=round_2))
         db.session.commit()
         materialize_all_rounds(db.session)
 
@@ -155,7 +154,7 @@ class TestTeam:
         assert "Blue Team 1" in results["rgb_colors"]
         assert results["rgb_colors"]["Blue Team 1"].startswith("#")
         assert "scores" in results
-        assert results["scores"] == {"Blue Team 1": [0, 100, 100]}
+        assert results["scores"] == {"Blue Team 1": [0, 100, 0]}
 
     def test_get_round_scores(self):
         team = populate_sample_data(db.session)

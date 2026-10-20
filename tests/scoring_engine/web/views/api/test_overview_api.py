@@ -72,6 +72,7 @@ class TestOverviewAPI:
         for svc, result in zip(services, results):
             check = Check(service=svc, round=round_obj, result=result, output="", completed=True)
             db.session.add(check)
+            svc.scoring_up = bool(result)
         db.session.commit()
         from scoring_engine.scores import materialize_round, recompute_consecutive_failures_cache
 
@@ -291,12 +292,12 @@ class TestOverviewAPI:
         row_labels = [row[0] for row in rows]
         assert "Current Score" in row_labels
         assert "Current Place" in row_labels
-        assert "SLA Penalties" in row_labels
+        assert "SLA Penalties" not in row_labels
         assert "Services Up" in row_labels
         assert "Services Down" in row_labels
 
-    def test_get_data_with_sla_penalties_shown(self):
-        """Test that SLA penalties appear when a team exceeds the failure threshold."""
+    def test_get_data_omits_sla_penalty_score_row(self):
+        """SLA failures remain diagnostic and are not score deductions."""
         svc1 = Service(name="SSH", check_name="SSHCheck", host="10.0.0.1", port=22, team=self.blue_team, points=100)
         db.session.add(svc1)
         db.session.commit()
@@ -319,22 +320,10 @@ class TestOverviewAPI:
         data = resp.json
         rows = data["data"]
 
-        # Find SLA Penalties row
-        sla_rows = [row for row in rows if row[0] == "SLA Penalties"]
-        assert len(sla_rows) == 1
-        sla_row = sla_rows[0]
-        # blue_team (index 1) should have a penalty displayed
-        # Penalty is calculated from consecutive failures exceeding threshold
-        # With 6 failures and threshold of 5, there should be a penalty
-        assert len(sla_row) >= 2
-        # Penalty is a plain number (magnitude), not a rendered HTML string
-        assert isinstance(sla_row[1], int)
-        assert sla_row[1] > 0
-        # Teams without penalties report 0
-        assert sla_row[2] == 0
+        assert "SLA Penalties" not in [row[0] for row in rows]
 
-    def test_get_data_sla_with_scores_uses_adjusted(self):
-        """When SLA is enabled, current scores reflect penalty deductions."""
+    def test_get_data_sla_does_not_change_current_scores(self):
+        """When SLA is enabled, service points still reflect current state."""
         svc1 = Service(name="SSH", check_name="SSHCheck", host="10.0.0.1", port=22, team=self.blue_team, points=100)
         svc2 = Service(name="SSH", check_name="SSHCheck", host="10.0.0.2", port=22, team=self.blue_team2, points=100)
         db.session.add_all([svc1, svc2])
@@ -355,8 +344,7 @@ class TestOverviewAPI:
         rows = data["data"]
         scores_row = rows[0]
         assert scores_row[0] == "Current Score"
-        # Both teams passed, so scores should be present
-        assert len(scores_row) == 3
+        assert scores_row[1:] == ["100", "100"]
 
     def test_get_data_sla_allow_negative(self):
         """Test SLA with allow_negative setting."""
@@ -494,17 +482,10 @@ class TestOverviewAPI:
         assert up_row[1] == 1 and down_row[1] == 1
         assert up_row[2] == 1 and down_row[2] == 0
 
-    def test_get_data_sla_penalties_are_numeric(self):
-        """SLA Penalties cells are plain numbers (magnitude), not formatted strings."""
+    def test_get_data_has_no_sla_penalty_score_row(self):
+        """The overview score table does not include a separate SLA deduction."""
         self._setup_penalty_scenario()
 
         resp = self.client.get("/api/overview/get_data")
         rows = resp.json["data"]
-        sla_row = next(row for row in rows if row[0] == "SLA Penalties")
-
-        for cell in sla_row[1:]:
-            assert isinstance(cell, (int, float))
-            assert not isinstance(cell, bool)
-        # blue_team accrued a penalty, blue_team2 did not
-        assert sla_row[1] > 0
-        assert sla_row[2] == 0
+        assert "SLA Penalties" not in [row[0] for row in rows]

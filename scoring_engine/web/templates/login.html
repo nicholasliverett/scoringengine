@@ -7,28 +7,17 @@
 {% block content %}
 <div class="page-wrap">
     <section class="form-signin mb-4">
-        <h2 class="form-signin-heading">Exam participation</h2>
-        <p>Upload the flag file from your assigned workstation to sign in and record your participation.</p>
-        <form method="POST" action="{{ url_for('auth.flag_login') }}" enctype="multipart/form-data">
+        <h2 class="form-signin-heading">Exam login</h2>
+        <p>Paste your exam flag to sign in.</p>
+        <form method="POST" action="{{ url_for('auth.flag_login') }}">
             {{ flag_form.csrf_token }}
-            <label for="flag_file" class="form-label">Flag file</label>
-            {{ flag_form.flag_file(class="form-control mb-3", required=true, accept=".txt,text/plain", autofocus=true) }}
-            <button class="btn btn-lg btn-primary w-100" type="submit">Continue with exam flag</button>
+            <label for="flag" class="form-label">Exam flag</label>
+            {{ flag_form.flag(class="form-control mb-3", required=true, autocomplete="off", autocapitalize="none", spellcheck="false", autofocus=true) }}
+            <button class="btn btn-lg btn-primary w-100" type="submit">Continue</button>
         </form>
     </section>
-    <div class="form-signin-heading text-center mb-3">Other users</div>
-    <form method="POST" role="form" class="form-signin">
-        {{ form.csrf_token }}
-        <h2 class="form-signin-heading">Please sign in</h2>
-        <label for="inputUsername" class="visually-hidden">Username</label>
-        {{ form.username() }}
-        <label for="inputPassword" class="visually-hidden">Password</label>
-        {{ form.password() }}
-        <div class="form-check my-3">
-            {{ form.remember(class="form-check-input") }}
-            <label class="form-check-label" for="remember">Remember me</label>
-        </div>
-        <button class="btn btn-lg btn-primary w-100" type="submit">Sign in</button>
-    </form>
+    <div class="form-signin">
+        <a class="btn btn-outline-secondary w-100" href="{{ url_for('auth.password_login') }}">Other users</a>
+    </div>
 </div>
 {% endblock %}

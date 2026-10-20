@@ -54,7 +54,7 @@ class TestScoreboardAPI:
         db.session.add(round_obj)
         db.session.flush()
         for svc, result in zip(services, results):
-            check = Check(service=svc, round=round_obj, result=result, output="")
+            check = Check(service=svc, round=round_obj, result=result, output="", completed=True)
             db.session.add(check)
         db.session.commit()
         from scoring_engine.scores import materialize_round
@@ -91,10 +91,9 @@ class TestScoreboardAPI:
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
-        # blue_team: 2 passing checks * 100 points = 200
-        # blue_team2: 1 passing check * 150 points = 150
-        assert data["service_scores"] == ["200", "150"]
-        assert data["adjusted_scores"] == ["200", "150"]
+        # A passing service earns its configured points once; a failed service is zero.
+        assert data["service_scores"] == ["100", "0"]
+        assert data["adjusted_scores"] == ["100", "0"]
         assert len(data["colors"]) == 2
 
     def test_get_bar_data_with_sla_penalties(self):
@@ -117,7 +116,7 @@ class TestScoreboardAPI:
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
-        assert data["sla_enabled"] is True
+        assert data["sla_enabled"] is False
         # Service score is 0 (all checks failed), so adjusted should be 0
         assert data["service_scores"][0] == "0"
 
@@ -199,11 +198,9 @@ class TestScoreboardAPI:
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
-        assert data["sla_enabled"] is True
+        assert data["sla_enabled"] is False
         adjusted = int(data["adjusted_scores"][0])
-        # With allow_negative=True, adjusted can be negative
-        # (or at least the code path allowing negative is exercised)
-        assert isinstance(adjusted, int)
+        assert adjusted == 0
 
     # -----------------------------------------------------------------------
     # /api/scoreboard/get_line_data
@@ -222,7 +219,7 @@ class TestScoreboardAPI:
         assert len(data["team"]) == 2
 
     def test_get_line_data_with_rounds(self):
-        """Line data includes cumulative scores per round."""
+        """Line data carries current service state across rounds."""
         svc1 = Service(name="SSH", check_name="SSHCheck", host="10.0.0.1", team=self.blue_team, points=100)
         svc2 = Service(name="HTTP", check_name="HTTPCheck", host="10.0.0.2", team=self.blue_team2, points=50)
         db.session.add_all([svc1, svc2])
@@ -251,21 +248,17 @@ class TestScoreboardAPI:
         assert team1_data is not None
         assert team2_data is not None
 
-        # Scores are cumulative per round; a round with no points carries the
-        # previous total forward so the series aligns to the rounds axis.
-        # Blue Team: pass r1 (100), pass r2 (100), fail r3 (carry 200)
-        # Cumulative by round 0,1,2,3: [0, 100, 200, 200]
-        assert team1_data["scores"] == [0, 100, 200, 200]
+        # Blue Team is up for rounds 1-2, then down in round 3.
+        assert team1_data["scores"] == [0, 100, 100, 0]
 
-        # Blue Team 2: pass r1 (50), fail r2 (carry 50), pass r3 (100)
-        # Cumulative by round 0,1,2,3: [0, 50, 50, 100]
-        assert team2_data["scores"] == [0, 50, 50, 100]
+        # Blue Team 2 moves down in round 2 and recovers in round 3.
+        assert team2_data["scores"] == [0, 50, 0, 50]
 
         assert "color" in team1_data
         assert "color" in team2_data
 
-    def test_get_line_data_cumulative_scores(self):
-        """Line data scores accumulate correctly across rounds."""
+    def test_get_line_data_repeated_passes_do_not_accumulate(self):
+        """Repeated passes keep the service at its fixed configured value."""
         svc = Service(name="DNS", check_name="DNSCheck", host="10.0.0.1", team=self.blue_team, points=200)
         db.session.add(svc)
         db.session.commit()
@@ -278,12 +271,11 @@ class TestScoreboardAPI:
         data = resp.json
 
         team_data = data["team"][0]
-        # Cumulative: [0, 200, 400]
-        assert team_data["scores"] == [0, 200, 400]
+        assert team_data["scores"] == [0, 200, 200]
 
     def test_get_line_data_downsamples_when_over_cap(self, monkeypatch):
         """A long competition is downsampled to a bounded number of x-points,
-        keeping the endpoints and the final cumulative total, with every team's
+        keeping the endpoints and the final current score, with every team's
         series aligned to the (downsampled) rounds axis."""
         import scoring_engine.web.views.api.scoreboard as sb
 
@@ -305,7 +297,7 @@ class TestScoreboardAPI:
         for t in data["team"]:
             assert len(t["scores"]) == len(data["rounds"])  # aligned
         team = next(t for t in data["team"] if t["name"] == "Blue Team")
-        assert team["scores"][-1] == 120  # 12 rounds * 10, full total preserved
+        assert team["scores"][-1] == 10
 
     # -----------------------------------------------------------------------
     # Anonymize mode tests

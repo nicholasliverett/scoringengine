@@ -8,7 +8,7 @@ from flask_login import LoginManager, current_user, login_required, login_user, 
 from flask_wtf import FlaskForm
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm.exc import NoResultFound
-from wtforms import BooleanField, FileField, PasswordField, StringField
+from wtforms import BooleanField, PasswordField, StringField
 from wtforms.validators import InputRequired
 
 from scoring_engine.config import config
@@ -62,7 +62,7 @@ class LoginForm(FlaskForm):
 
 
 class FlagLoginForm(FlaskForm):
-    flag_file = FileField("Participation flag")
+    flag = StringField("Exam flag", [InputRequired()])
 
 
 def _redirect_after_login(user):
@@ -125,12 +125,21 @@ def login():
         flash("You are already logged in.", "info")
         return redirect(url_for("welcome.home"))
 
-    form = LoginForm()
-    flag_form = FlagLoginForm()
+    if request.method == "POST":
+        # Keep the historical POST endpoint working for existing integrations.
+        return _handle_password_login(LoginForm())
+
+    return render_template("login.html", flag_form=FlagLoginForm())
+
+
+def _handle_password_login(form):
+    if current_user.is_authenticated:
+        flash("You are already logged in.", "info")
+        return redirect(url_for("welcome.home"))
 
     if form.errors:
         flash(form.errors, "danger")
-        return render_template("login.html", form=form, flag_form=flag_form)
+        return render_template("password_login.html", form=form)
 
     if form.validate_on_submit():
         username = request.form.get("username")
@@ -138,13 +147,13 @@ def login():
 
         if len(password.encode("utf-8")) > 72:
             flash("Password must be 72 bytes or fewer.", "danger")
-            return render_template("login.html", form=form, flag_form=flag_form)
+            return render_template("password_login.html", form=form)
 
         try:
             user = db.session.query(User).filter(User.username == username).one()
         except NoResultFound:
             flash("Invalid username or password. Please try again.", "danger")
-            return render_template("login.html", form=form, flag_form=flag_form)
+            return render_template("password_login.html", form=form)
 
         if user.check_password(password):
             user.authenticated = True
@@ -154,9 +163,20 @@ def login():
             return _redirect_after_login(user)
         else:
             flash("Invalid username or password. Please try again.", "danger")
-            return render_template("login.html", form=form, flag_form=flag_form)
+            return render_template("password_login.html", form=form)
 
-    return render_template("login.html", form=form, flag_form=flag_form)
+    return render_template("password_login.html", form=form)
+
+
+@mod.route("/login/password", methods=["GET", "POST"])
+def password_login():
+    form = LoginForm()
+    if request.method == "POST":
+        return _handle_password_login(form)
+    if current_user.is_authenticated:
+        flash("You are already logged in.", "info")
+        return redirect(url_for("welcome.home"))
+    return render_template("password_login.html", form=form)
 
 
 @mod.route("/login/flag", methods=["POST"])
@@ -164,28 +184,18 @@ def flag_login():
     if current_user.is_authenticated:
         return redirect(url_for("overview.home"))
     form = FlagLoginForm()
-    uploaded = form.flag_file.data
-    if not form.validate_on_submit() or uploaded is None or not uploaded.filename:
-        flash("Choose your exam flag file and try again.", "danger")
+    if not form.validate_on_submit():
+        flash("Paste your exam flag and try again.", "danger")
         return redirect(url_for("auth.login"))
-    # Read one byte over the accepted limit; never trust the browser's filename
-    # or Content-Length and never persist the submitted bearer credential.
-    raw = uploaded.stream.read(4097)
-    if len(raw) > 4096:
-        flash("The flag file is too large.", "danger")
-        return redirect(url_for("auth.login"))
-    try:
-        token = raw.decode("utf-8-sig").strip()
-    except UnicodeDecodeError:
-        token = ""
+    token = (form.flag.data or "").strip()
     if not token or len(token) > 512:
-        flash("That flag file is not valid.", "danger")
+        flash("That exam flag is not valid.", "danger")
         return redirect(url_for("auth.login"))
 
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     credential = db.session.query(ExamCredential).filter_by(token_hash=token_hash).one_or_none()
     if credential is None or not credential.user.is_blue_team or credential.team_id != credential.user.team_id:
-        flash("That flag was not recognized. Check that you selected the right file.", "danger")
+        flash("That exam flag was not recognized.", "danger")
         return redirect(url_for("auth.login"))
 
     user = credential.user

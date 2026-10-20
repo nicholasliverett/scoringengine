@@ -19,7 +19,6 @@ from scoring_engine.models.round import Round
 from scoring_engine.models.service import Service
 from scoring_engine.models.setting import Setting
 from scoring_engine.models.team import Team
-from scoring_engine.sla import get_sla_config, apply_dynamic_scoring_to_round, calculate_team_total_penalties
 from scoring_engine.web.views.api.overview import calculate_ranks
 
 from . import make_cache_key, mod
@@ -152,47 +151,16 @@ def api_stats_scoring_overview():
 
     blue_teams = db.session.query(Team).filter(Team.color == "Blue").order_by(Team.id).all()
     blue_team_ids = [t.id for t in blue_teams]
-    blue_teams_dict = {t.id: t for t in blue_teams}
-
-    sla_config = get_sla_config()
-
-    # --- Service Scores ---
-    if sla_config.dynamic_enabled:
-        from collections import defaultdict
-
-        round_scores = (
-            db.session.query(Service.team_id, Check.round_id, func.sum(Service.points).label("round_score"))
-            .join(Check)
-            .filter(Check.result.is_(True))
-            .group_by(Service.team_id, Check.round_id)
-            .all()
-        )
-        rounds_map = {r.id: r.number for r in db.session.query(Round.id, Round.number).all()}
-        team_scores = defaultdict(int)
-        for team_id, round_id, round_score in round_scores:
-            round_number = rounds_map.get(round_id, 0)
-            team_scores[team_id] += apply_dynamic_scoring_to_round(round_number, round_score, sla_config)
-        team_scores = dict(team_scores)
-    else:
-        from sqlalchemy import desc
-
-        team_scores = dict(
-            db.session.query(Service.team_id, func.sum(Service.points).label("score"))
-            .join(Check)
-            .filter(Check.result.is_(True))
-            .group_by(Service.team_id)
-            .all()
-        )
-
-    # Apply SLA penalties
-    adjusted_scores = {}
-    for tid in blue_team_ids:
-        base = team_scores.get(tid, 0)
-        if sla_config.sla_enabled:
-            penalty = calculate_team_total_penalties(blue_teams_dict[tid], sla_config)
-            adjusted_scores[tid] = max(0, base - penalty) if not sla_config.allow_negative else base - penalty
-        else:
-            adjusted_scores[tid] = base
+    # A service contributes its configured points while its latest completed
+    # check passes. Repeated passes, dynamic multipliers, and SLA penalties do
+    # not alter current-state scores.
+    adjusted_scores = dict(
+        db.session.query(Service.team_id, func.coalesce(func.sum(Service.points), 0))
+        .filter(Service.scoring_up.is_(True), Service.team_id.in_(blue_team_ids))
+        .group_by(Service.team_id)
+        .all()
+    )
+    adjusted_scores = {tid: int(adjusted_scores.get(tid, 0)) for tid in blue_team_ids}
 
     service_ranks = calculate_ranks(adjusted_scores)
 

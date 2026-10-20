@@ -1,4 +1,4 @@
-from sqlalchemy import Column, ForeignKey, Integer, String, desc, func
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, desc, func
 from sqlalchemy.orm import relationship
 
 from scoring_engine.db import db
@@ -41,6 +41,9 @@ class Service(Base):
     host = Column(String(256), nullable=False)
     port = Column(Integer, default=0)
     worker_queue = Column(String(50), default="main")
+    # Latest completed check state, updated atomically with each closed round.
+    # Service points are now a live state score: up earns `points`, down earns 0.
+    scoring_up = Column(Boolean, nullable=False, default=False, server_default="0")
     # Materialized consecutive-failure count, maintained by the engine at round
     # close (scores.apply_consecutive_failures). Read by the batched SLA penalty
     # path (scores.team_penalties) so the scoreboard never scans the whole checks
@@ -72,7 +75,12 @@ class Service(Base):
         Get the result of the most recent check for this service.
         Uses a DB query to avoid session/lazy loading issues.
         """
-        last_check = db.session.query(Check).filter(Check.service_id == self.id).order_by(desc(Check.id)).first()
+        last_check = (
+            db.session.query(Check)
+            .filter(Check.service_id == self.id, Check.completed.is_(True))
+            .order_by(desc(Check.id))
+            .first()
+        )
         if last_check:
             return last_check.result
         return None
@@ -90,12 +98,8 @@ class Service(Base):
         (see scoring_engine/web/views/api/team.py:42-62 for efficient implementation).
         """
         scores = (
-            db.session.query(
-                Service.team_id,
-                func.sum(Service.points).label("score"),
-            )
-            .join(Check)
-            .filter(Check.result.is_(True))
+            db.session.query(Service.team_id, func.sum(Service.points).label("score"))
+            .filter(Service.scoring_up.is_(True))
             .filter(Service.name == self.name)
             .group_by(Service.team_id)
             .order_by(desc("score"))
@@ -108,20 +112,17 @@ class Service(Base):
     @property
     def score_earned(self):
         """
-        Calculate total score earned by this service.
-        WARNING: Performs DB query on each access. Cache when used multiple times.
+        Current score for this service: its points while the latest check is up,
+        otherwise zero.
         """
-        return (
-            db.session.query(Check).filter(Check.service_id == self.id).filter(Check.result.is_(True)).count()
-        ) * self.points
+        return int(self.points or 0) if self.scoring_up else 0
 
     @property
     def max_score(self):
         """
-        Calculate maximum possible score for this service.
-        WARNING: Performs DB query on each access. Cache when used multiple times.
+        Maximum current-state score for this service.
         """
-        return (db.session.query(Check).filter(Check.service_id == self.id).count()) * self.points
+        return int(self.points or 0)
 
     @property
     def percent_earned(self):

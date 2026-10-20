@@ -10,6 +10,7 @@ from scoring_engine.models.check import Check
 from scoring_engine.models.kb import KB
 from scoring_engine.models.round import Round
 from scoring_engine.models.service import Service
+from scoring_engine.models.service_score_snapshot import ServiceScoreSnapshot
 from scoring_engine.models.setting import Setting
 from scoring_engine.models.team import Team
 from scoring_engine.models.user import User
@@ -75,13 +76,16 @@ class TestScoreRollback:
             db.session.add(round_obj)
             db.session.commit()
 
-            check = Check(round=round_obj, service=self.service, result=True, reason="Test check")
+            check = Check(round=round_obj, service=self.service, result=True, reason="Test check", completed=True)
             db.session.add(check)
 
             kb = KB(round_num=i, name="task_ids", value="{}")
             db.session.add(kb)
 
         db.session.commit()
+        from scoring_engine.scores import materialize_all_rounds
+
+        materialize_all_rounds(db.session)
 
     # === Rollback Preview Tests ===
 
@@ -92,7 +96,7 @@ class TestScoreRollback:
     def test_preview_requires_white_team(self):
         self.login_blue_team()
         resp = self.client.post("/api/admin/rollback/preview", json={"round_number": 1})
-        assert resp.status_code == 403
+        assert resp.status_code == 404
 
     def test_preview_requires_round_number(self):
         self.login_white_team()
@@ -128,7 +132,7 @@ class TestScoreRollback:
     def test_rollback_requires_white_team(self):
         self.login_blue_team()
         resp = self.client.post("/api/admin/rollback", json={"round_number": 1, "confirm": True})
-        assert resp.status_code == 403
+        assert resp.status_code == 404
 
     def test_rollback_requires_round_number(self):
         self.login_white_team()
@@ -163,6 +167,7 @@ class TestScoreRollback:
         assert db.session.query(Round).count() == 5
         assert db.session.query(Check).count() == 5
         assert db.session.query(KB).count() == 5
+        assert self.service.scoring_up is True
 
         resp = self.client.post("/api/admin/rollback", json={"round_number": 3, "confirm": True})
         assert resp.status_code == 200
@@ -177,6 +182,8 @@ class TestScoreRollback:
         assert db.session.query(Round).count() == 2
         assert db.session.query(Check).count() == 2
         assert db.session.query(KB).count() == 2
+        assert db.session.query(ServiceScoreSnapshot).count() == 1
+        assert self.service.scoring_up is True
 
         remaining = [r.number for r in db.session.query(Round.number).all()]
         assert remaining == [1, 2]
@@ -194,6 +201,8 @@ class TestScoreRollback:
         assert db.session.query(Round).count() == 0
         assert db.session.query(Check).count() == 0
         assert db.session.query(KB).count() == 0
+        assert db.session.query(ServiceScoreSnapshot).count() == 0
+        assert self.service.scoring_up is False
 
     def test_rollback_invalid_round_number(self):
         self.login_white_team()

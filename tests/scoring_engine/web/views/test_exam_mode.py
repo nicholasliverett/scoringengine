@@ -1,11 +1,11 @@
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
-from io import BytesIO
 from threading import Barrier
 
 from scoring_engine.db import db
 from scoring_engine.models.exam_credential import ExamCredential, ExamParticipation
 from scoring_engine.models.score_adjustment import ScoreAdjustment
+from scoring_engine.models.service import Service
 from scoring_engine.models.team import Team
 from scoring_engine.models.user import User
 
@@ -24,8 +24,7 @@ def test_flag_login_reuses_credential_but_awards_once(test_client, db_session):
 
     invalid = test_client.post(
         "/login/flag",
-        data={"flag_file": (BytesIO(b"incorrect-flag"), "flag.txt")},
-        content_type="multipart/form-data",
+        data={"flag": "incorrect-flag"},
     )
     assert invalid.status_code == 302
     assert db.session.query(ExamParticipation).filter_by(team_id=team.id).count() == 0
@@ -33,8 +32,7 @@ def test_flag_login_reuses_credential_but_awards_once(test_client, db_session):
     for attempt in range(2):
         response = test_client.post(
             "/login/flag",
-            data={"flag_file": (BytesIO((token + "\n").encode()), "flag.txt")},
-            content_type="multipart/form-data",
+            data={"flag": token + "\n"},
             follow_redirects=True,
         )
         assert response.status_code == 200
@@ -50,6 +48,30 @@ def test_flag_login_reuses_credential_but_awards_once(test_client, db_session):
     assert summary["participation_awarded"] is True
     assert summary["participation_points"] == 100
     assert summary["total"] == 100
+
+
+def test_exam_stats_show_current_service_points_not_accumulated_points(blue_login, db_session):
+    from tests.scoring_engine.factories import make_check, make_round
+    from scoring_engine.scores import materialize_round
+
+    client, teams = blue_login
+    team = teams["blue_team"]
+    service = Service(name="SSH", team=team, check_name="SSHCheck", host="exam-host", points=125)
+    db.session.add(service)
+    db.session.commit()
+
+    expected = [125, 125, 0, 125]
+    for number, result in enumerate((True, True, False, True), start=1):
+        rnd = make_round(number=number)
+        make_check(service=service, round_obj=rnd, result=result)
+        materialize_round(db.session, rnd.id, rnd.number)
+
+    response = client.get("/api/exam/stats")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert [row["points"] for row in data["rounds"]] == expected
+    assert data["score"]["service"] == 125
+    assert data["score"]["total"] == 125
 
 
 def test_concurrent_flag_uploads_award_once(app, db_session):
@@ -74,8 +96,7 @@ def test_concurrent_flag_uploads_award_once(app, db_session):
         start.wait(timeout=5)
         return client.post(
             "/login/flag",
-            data={"flag_file": (BytesIO((token + "\n").encode()), "flag.txt")},
-            content_type="multipart/form-data",
+            data={"flag": token + "\n"},
         ).status_code
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -84,6 +105,20 @@ def test_concurrent_flag_uploads_award_once(app, db_session):
     assert statuses == [302, 302]
     assert db.session.query(ExamParticipation).filter_by(team_id=team.id).count() == 1
     assert db.session.query(ScoreAdjustment).filter_by(team_id=team.id).count() == 1
+
+
+def test_exam_login_uses_paste_field_and_other_users_page(test_client):
+    exam_page = test_client.get("/login")
+    password_page = test_client.get("/login/password")
+
+    assert exam_page.status_code == 200
+    assert b"Exam login" in exam_page.data
+    assert b'type="text"' in exam_page.data
+    assert b"Other users" in exam_page.data
+    assert b"multipart/form-data" not in exam_page.data
+    assert password_page.status_code == 200
+    assert b"Username" in password_page.data
+    assert b"Password" in password_page.data
 
 
 def test_blue_portal_hides_scoreboard_and_service_apis(blue_login):

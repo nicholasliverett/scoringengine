@@ -45,6 +45,7 @@ from scoring_engine.models.kb import KB
 from scoring_engine.models.property import Property
 from scoring_engine.models.round import Round
 from scoring_engine.models.round_score import RoundScore
+from scoring_engine.models.service_score_snapshot import ServiceScoreSnapshot
 from scoring_engine.models.score_adjustment import ScoreAdjustment
 from scoring_engine.models.service import Service
 from scoring_engine.models.setting import Setting
@@ -1709,12 +1710,24 @@ def admin_rollback():
 
         # Count checks to delete
         checks_count = db.session.query(Check).filter(Check.round_id.in_(round_ids)).count()
+        affected_service_ids = [
+            row[0]
+            for row in db.session.query(Check.service_id)
+            .filter(Check.round_id.in_(round_ids))
+            .distinct()
+            .all()
+        ]
 
         # Count KB entries to delete
         kb_count = db.session.query(KB).filter(KB.round_num >= round_number).count()
 
         # Count materialized round scores to delete
         round_scores_count = db.session.query(RoundScore).filter(RoundScore.round_number >= round_number).count()
+        state_snapshots_count = (
+            db.session.query(ServiceScoreSnapshot)
+            .filter(ServiceScoreSnapshot.round_number >= round_number)
+            .count()
+        )
 
         # Delete checks in batches to avoid lock wait timeout
         BATCH_SIZE = 500
@@ -1726,6 +1739,9 @@ def admin_rollback():
         # Delete materialized round scores. Keyed by round_number, so they must go
         # with the rounds or the scoreboard keeps ghost points for deleted rounds.
         db.session.query(RoundScore).filter(RoundScore.round_number >= round_number).delete(synchronize_session=False)
+        db.session.query(ServiceScoreSnapshot).filter(
+            ServiceScoreSnapshot.round_number >= round_number
+        ).delete(synchronize_session=False)
         db.session.commit()
 
         # Delete KB entries
@@ -1735,6 +1751,11 @@ def admin_rollback():
         # Delete rounds
         rounds_count = len(rounds_to_delete)
         db.session.query(Round).filter(Round.number >= round_number).delete(synchronize_session=False)
+        if affected_service_ids:
+            from scoring_engine.scores import recompute_consecutive_failures_cache, recompute_service_scoring_states
+
+            recompute_consecutive_failures_cache(db.session, service_ids=affected_service_ids, commit=False)
+            recompute_service_scoring_states(db.session, service_ids=affected_service_ids, commit=False)
         db.session.commit()
 
     finally:
@@ -1761,6 +1782,7 @@ def admin_rollback():
                 "checks": checks_count,
                 "kb_entries": kb_count,
                 "round_scores": round_scores_count,
+                "service_state_snapshots": state_snapshots_count,
             },
             "new_current_round": Round.get_last_round_num(),
         }
@@ -1797,7 +1819,13 @@ def admin_rollback_preview():
                 "status": "success",
                 "current_round": 0,
                 "round_number": round_number,
-                "will_delete": {"rounds": 0, "checks": 0, "kb_entries": 0, "round_scores": 0},
+                "will_delete": {
+                    "rounds": 0,
+                    "checks": 0,
+                    "kb_entries": 0,
+                    "round_scores": 0,
+                    "service_state_snapshots": 0,
+                },
             }
         )
 
@@ -1813,6 +1841,11 @@ def admin_rollback_preview():
 
     # Count materialized round scores
     round_scores_count = db.session.query(RoundScore).filter(RoundScore.round_number >= round_number).count()
+    state_snapshots_count = (
+        db.session.query(ServiceScoreSnapshot)
+        .filter(ServiceScoreSnapshot.round_number >= round_number)
+        .count()
+    )
 
     return jsonify(
         {
@@ -1824,6 +1857,7 @@ def admin_rollback_preview():
                 "checks": checks_count,
                 "kb_entries": kb_count,
                 "round_scores": round_scores_count,
+                "service_state_snapshots": state_snapshots_count,
             },
         }
     )

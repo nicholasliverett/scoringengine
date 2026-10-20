@@ -9,22 +9,22 @@ from sqlalchemy.exc import IntegrityError
 
 from scoring_engine.db import db
 from scoring_engine.models.exam_credential import ExamCredential
-from scoring_engine.models.round_score import RoundScore
+from scoring_engine.models.round import Round
+from scoring_engine.models.service_score_snapshot import ServiceScoreSnapshot
 from scoring_engine.models.setting import Setting
 from scoring_engine.models.team import Team
 from scoring_engine.models.user import User
-from scoring_engine.sla import get_sla_config, apply_dynamic_scoring_to_round
+from scoring_engine.sla import get_sla_config
 
 from . import mod
 
 
 def _own_score(team_id):
-    from scoring_engine.scores import team_adjustment_totals, team_penalties, team_service_scores
+    from scoring_engine.scores import team_adjustment_totals, team_service_scores
 
     scoring = get_sla_config()
     service = team_service_scores(db.session, scoring).get(team_id, 0)
     adjustment = team_adjustment_totals(db.session).get(team_id, 0)
-    penalty = team_penalties(db.session, scoring).get(team_id, 0) if scoring.sla_enabled else 0
 
     inject = 0
     visible = Setting.get_setting("inject_scores_visible")
@@ -38,13 +38,12 @@ def _own_score(team_id):
         ).scalar() or 0
 
     if scoring.weighted_scoring_enabled:
-        service = int(round(service * scoring.service_weight))
         inject = int(round(inject * scoring.inject_weight))
-    total = service + inject + adjustment - penalty
+    total = service + inject + adjustment
     if not scoring.allow_negative:
         total = max(0, total)
     return {"total": int(total), "service": int(service), "inject": int(inject),
-            "adjustments": int(adjustment), "sla_penalty": int(penalty)}
+            "adjustments": int(adjustment), "sla_penalty": 0}
 
 
 @mod.route("/api/exam/summary")
@@ -67,15 +66,17 @@ def exam_stats():
     if not current_user.is_blue_team:
         return jsonify({"error": "forbidden"}), 403
     scoring = get_sla_config()
-    rows = db.session.query(RoundScore.round_number, RoundScore.service_points).filter(
-        RoundScore.team_id == current_user.team_id
-    ).order_by(RoundScore.round_number).all()
+    rows = db.session.query(
+        ServiceScoreSnapshot.round_number, ServiceScoreSnapshot.service_points
+    ).filter(ServiceScoreSnapshot.team_id == current_user.team_id).order_by(
+        ServiceScoreSnapshot.round_number
+    ).all()
+    state_by_round = dict(rows)
     rounds = []
-    for number, points in rows:
-        round_points = apply_dynamic_scoring_to_round(number, points, scoring)
-        if scoring.weighted_scoring_enabled:
-            round_points = int(round(round_points * scoring.service_weight))
-        rounds.append({"round": number, "points": int(round_points)})
+    points = 0
+    for number in range(1, Round.get_last_round_num() + 1):
+        points = int(state_by_round.get(number, points) or 0)
+        rounds.append({"round": number, "points": points})
     # Expose the student's own awarded attendance credit and total only.
     from scoring_engine.models.exam_credential import ExamParticipation
 

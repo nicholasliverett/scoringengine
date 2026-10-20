@@ -687,13 +687,15 @@ class TestFailedRoundRecovery:
 
     def test_cleanup_removes_round_checks_and_kb(self):
         env = _make_service()
+        service_id = env.service.id
         round_obj = Round(round_start=datetime.now(), number=4)
         db.session.add(round_obj)
         other_round = Round(round_start=datetime.now(), number=3)
         db.session.add(other_round)
         db.session.commit()
-        db.session.add(Check(service=env.service, round=round_obj))
-        db.session.add(Check(service=env.service, round=other_round))
+        db.session.add(Check(service=env.service, round=round_obj, result=True, completed=True))
+        db.session.add(Check(service=env.service, round=other_round, result=False, completed=True))
+        env.service.scoring_up = True
         db.session.add(KB(name="task_ids", value="{}", round_num=4))
         db.session.add(KB(name="task_ids", value="{}", round_num=3))
         db.session.commit()
@@ -704,6 +706,7 @@ class TestFailedRoundRecovery:
         assert [r.number for r in db.session.query(Round).all()] == [3]
         assert db.session.query(Check).count() == 1
         assert [kb.round_num for kb in db.session.query(KB).all()] == [3]
+        assert db.session.get(Service, service_id).scoring_up is False
 
     def test_cleanup_is_a_noop_when_nothing_was_written(self):
         engine = Engine()

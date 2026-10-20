@@ -8,6 +8,7 @@ from scoring_engine.db import db
 from scoring_engine.models.check import Check
 from scoring_engine.models.round import Round
 from scoring_engine.models.service import Service
+from scoring_engine.models.setting import Setting
 from scoring_engine.models.team import Team
 from scoring_engine.models.user import User
 
@@ -77,7 +78,7 @@ class TestStatsAPI:
     # --- Response Structure Tests ---
 
     def test_stats_api_blue_team_response_structure(self):
-        """Blue team response has data and summary keys with service_breakdown"""
+        """Legacy all-service stats are hidden from exam users."""
         svc = Service(name="SSH", check_name="SSH Check", host="10.0.0.1", team=self.blue_team)
         db.session.add(svc)
         db.session.commit()
@@ -85,22 +86,7 @@ class TestStatsAPI:
 
         self.login("blueuser")
         resp = self.client.get("/api/stats")
-        assert resp.status_code == 200
-
-        data = resp.json
-        assert "data" in data
-        assert "summary" in data
-        assert len(data["data"]) == 1
-
-        round_entry = data["data"][0]
-        assert "round_id" in round_entry
-        assert "start_time" in round_entry
-        assert "end_time" in round_entry
-        assert "total_seconds" in round_entry
-        assert "num_up_services" in round_entry
-        assert "num_down_services" in round_entry
-        assert "service_breakdown" in round_entry
-        assert "SSH" in round_entry["service_breakdown"]
+        assert resp.status_code == 404
 
     # --- Filtering Tests ---
 
@@ -114,11 +100,7 @@ class TestStatsAPI:
 
         self.login("blueuser")
         resp = self.client.get("/api/stats")
-        data = resp.json
-
-        assert "SSH" in data["summary"]
-        assert "DNS" not in data["summary"]
-        assert data["data"][0]["service_breakdown"].get("DNS") is None
+        assert resp.status_code == 404
 
     def test_stats_api_white_team_sees_all(self):
         """White team sees all teams' services"""
@@ -149,18 +131,7 @@ class TestStatsAPI:
 
         self.login("blueuser")
         resp = self.client.get("/api/stats")
-        data = resp.json
-
-        round2 = data["data"][0]
-        round1 = data["data"][1]
-
-        assert round1["round_id"] < round2["round_id"]
-
-        assert round1["service_breakdown"]["SSH"] == {"up": 1, "down": 0}
-        assert round1["service_breakdown"]["DNS"] == {"up": 0, "down": 1}
-
-        assert round2["service_breakdown"]["SSH"] == {"up": 0, "down": 1}
-        assert round2["service_breakdown"]["DNS"] == {"up": 1, "down": 0}
+        assert resp.status_code == 404
 
     # --- Summary Totals Test ---
 
@@ -176,11 +147,7 @@ class TestStatsAPI:
 
         self.login("blueuser")
         resp = self.client.get("/api/stats")
-        data = resp.json
-
-        assert data["summary"]["HTTP"]["up"] == 2
-        assert data["summary"]["HTTP"]["down"] == 1
-        assert data["summary"]["HTTP"]["total"] == 3
+        assert resp.status_code == 404
 
     def test_stats_api_white_team_all_down_multi_team(self):
         """White team view: all services down across multiple teams shows 0 up."""
@@ -210,14 +177,29 @@ class TestStatsAPI:
             assert round_data["service_breakdown"][svc_name]["up"] == 0
             assert round_data["service_breakdown"][svc_name]["down"] == 2  # 2 teams
 
+    def test_instructor_scoring_overview_uses_fixed_current_state_points(self):
+        svc = Service(
+            name="SSH", check_name="SSH Check", host="10.0.0.1", team=self.blue_team, points=125,
+            scoring_up=True,
+        )
+        db.session.add(svc)
+        db.session.commit()
+        for key in ("dynamic_scoring_enabled", "sla_enabled"):
+            setting = Setting.get_setting(key)
+            setting.value = True
+            db.session.commit()
+            Setting.clear_cache(key)
+
+        self.login("whiteuser")
+        response = self.client.get("/api/stats/scoring_overview")
+        assert response.status_code == 200
+        rows = {row["team"]: row for row in response.get_json()["service_table"]}
+        assert rows["Blue Team"]["score"] == 125
+
     # --- Empty State Test ---
 
     def test_stats_api_no_rounds(self):
         """Empty data and summary when no rounds exist"""
         self.login("blueuser")
         resp = self.client.get("/api/stats")
-        assert resp.status_code == 200
-
-        data = resp.json
-        assert data["data"] == []
-        assert data["summary"] == {}
+        assert resp.status_code == 404

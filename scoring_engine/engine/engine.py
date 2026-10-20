@@ -28,6 +28,7 @@ from scoring_engine.models.environment import Environment
 from scoring_engine.models.kb import KB
 from scoring_engine.models.round import Round
 from scoring_engine.models.round_score import RoundScore
+from scoring_engine.models.service_score_snapshot import ServiceScoreSnapshot
 from scoring_engine.models.property import Property
 from scoring_engine.models.service import Service
 from scoring_engine.models.setting import Setting
@@ -376,14 +377,23 @@ class Engine(object):
                         self.db.session.query(RoundScore).filter(RoundScore.round_id.in_(round_ids)).delete(
                             synchronize_session=False
                         )
+                        self.db.session.query(ServiceScoreSnapshot).filter(
+                            ServiceScoreSnapshot.round_id.in_(round_ids)
+                        ).delete(synchronize_session=False)
                         self.db.session.query(Round).filter(Round.id.in_(round_ids)).delete(synchronize_session=False)
                         # The deleted round's pass/fail no longer applies; rebuild
                         # the consecutive-failure cache for the services it touched
                         # from the remaining checks (rare path -- a scan is fine).
                         if affected_service_ids:
-                            from scoring_engine.scores import recompute_consecutive_failures_cache
+                            from scoring_engine.scores import (
+                                recompute_consecutive_failures_cache,
+                                recompute_service_scoring_states,
+                            )
 
                             recompute_consecutive_failures_cache(
+                                self.db.session, service_ids=affected_service_ids, commit=False
+                            )
+                            recompute_service_scoring_states(
                                 self.db.session, service_ids=affected_service_ids, commit=False
                             )
                     kb_removed = (
@@ -644,10 +654,8 @@ class Engine(object):
                 # We keep track of the number of passed and failed checks per round
                 # so we can report a little bit at the end of each round
                 teams = {}
-                # Accumulate per-team service points for passing checks as we go, so
-                # the round_score rows can be written from memory in the same commit
-                # as the checks -- no extra query, and nothing that would autoflush
-                # the pending checks early.
+                # Build current team service totals from each service's latest
+                # completed state. The score snapshots and checks share one commit.
                 round_points = {}
                 # Per-service pass/fail for this round, accumulated in memory so
                 # the consecutive-failure cache can be updated in the same commit
@@ -718,10 +726,9 @@ class Engine(object):
                                 "Success": [],
                                 "Failed": [],
                             }
+                        environment.service.scoring_up = bool(result)
                         if result:
                             teams[environment.service.team.name]["Success"].append(environment.service.name)
-                            team_id = environment.service.team_id
-                            round_points[team_id] = round_points.get(team_id, 0) + environment.service.points
                             round_pass_ids.add(environment.service.id)
                         else:
                             teams[environment.service.team.name]["Failed"].append(environment.service.name)
@@ -745,13 +752,17 @@ class Engine(object):
                             command=command,
                         )
                         self.db.session.add(check)
+                for service in services:
+                    round_points.setdefault(service.team_id, 0)
+                    if service.scoring_up:
+                        round_points[service.team_id] += int(service.points or 0)
                 logger.info("Processed %d check results, committing to database", total_tasks)
                 round_end_time = _utcnow()
                 round_obj.round_end = round_end_time
 
-                # Materialize per-team score facts from the sums accumulated above,
-                # staged into the SAME commit as the round's checks so a round and
-                # its scores become visible atomically. Passing the precomputed
+                # Materialize the current per-team service state into sparse
+                # snapshots, staged into the SAME commit as the round's checks so
+                # a round and its scores become visible atomically. Passing the precomputed
                 # points (and clear_existing=False, since a fresh round has no prior
                 # rows) means no query runs here -- nothing autoflushes the pending
                 # checks ahead of this single commit.

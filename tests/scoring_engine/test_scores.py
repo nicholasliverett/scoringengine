@@ -1,200 +1,94 @@
-"""Tests for round_score materialization (wave 2, phase 1).
-
-The load-bearing assertion is the *golden equivalence* test: the sum of a team's
-materialized ``round_score.service_points`` must equal ``Team.current_score``, the
-live full-history computation it will replace. If those two ever diverge, the whole
-materialization is unsafe to read from -- so this is the guard the rest of wave 2
-builds on.
-"""
+﻿"""Tests for current-state service scoring snapshots."""
 
 from scoring_engine.db import db
-from scoring_engine.models.round_score import RoundScore
+from scoring_engine.models.service_score_snapshot import ServiceScoreSnapshot
 from scoring_engine.models.service import Service
-from scoring_engine.scores import compute_round_service_points, materialize_round
+from scoring_engine.scores import (
+    compute_round_service_points,
+    materialize_all_rounds,
+    materialize_round,
+    team_service_score,
+)
 from tests.scoring_engine.factories import make_check, make_round, make_service, make_team
 
 
-class TestComputeRoundServicePoints:
-    def test_sums_only_passing_checks(self):
-        team = make_team(color="Blue")
-        svc_a = make_service(team=team, name="A")
-        svc_b = make_service(team=team, name="B")
-        svc_a.points = 100
-        svc_b.points = 50
-        db.session.commit()
-        rnd = make_round(number=1)
-        make_check(service=svc_a, round_obj=rnd, result=True)
-        make_check(service=svc_b, round_obj=rnd, result=False)  # down: excluded
+def test_repeated_passes_do_not_accumulate_and_failure_sets_score_to_zero():
+    team = make_team(color="Blue")
+    service = make_service(team=team, name="SSH")
+    service.points = 100
+    db.session.commit()
 
-        result = compute_round_service_points(db.session, rnd.id)
-        assert result == {team.id: 100}
+    rounds = [make_round(number=n) for n in range(1, 4)]
+    make_check(service=service, round_obj=rounds[0], result=True)
+    assert compute_round_service_points(db.session, rounds[0].id) == {team.id: 100}
+    materialize_round(db.session, rounds[0].id, rounds[0].number)
 
-    def test_absent_team_when_nothing_passes(self):
-        team = make_team(color="Blue")
-        svc = make_service(team=team)
-        db.session.commit()
-        rnd = make_round(number=1)
-        make_check(service=svc, round_obj=rnd, result=False)
-        # No passing checks -> team simply absent (reads coalesce to zero).
-        assert compute_round_service_points(db.session, rnd.id) == {}
+    make_check(service=service, round_obj=rounds[1], result=True)
+    assert compute_round_service_points(db.session, rounds[1].id) == {team.id: 100}
+    assert materialize_round(db.session, rounds[1].id, rounds[1].number) == 0
+
+    make_check(service=service, round_obj=rounds[2], result=False)
+    assert compute_round_service_points(db.session, rounds[2].id) == {team.id: 0}
+    assert materialize_round(db.session, rounds[2].id, rounds[2].number) == 1
+    assert team_service_score(db.session, team.id) == 0
+    assert [r.service_points for r in db.session.query(ServiceScoreSnapshot).order_by(ServiceScoreSnapshot.round_number)] == [100, 0]
 
 
-class TestMaterializeRound:
-    def test_writes_one_row_per_scoring_team(self):
-        blue1 = make_team(color="Blue")
-        blue2 = make_team(color="Blue")
-        s1 = make_service(team=blue1)
-        s2 = make_service(team=blue2)
-        s1.points = 100
-        s2.points = 100
-        db.session.commit()
-        rnd = make_round(number=1)
-        make_check(service=s1, round_obj=rnd, result=True)
-        make_check(service=s2, round_obj=rnd, result=True)
-
-        written = materialize_round(db.session, rnd.id, rnd.number)
-        assert written == 2
-        rows = db.session.query(RoundScore).filter(RoundScore.round_id == rnd.id).all()
-        assert {r.team_id: r.service_points for r in rows} == {blue1.id: 100, blue2.id: 100}
-        # round_number is denormalized onto every row.
-        assert all(r.round_number == 1 for r in rows)
-        # flag_points is 0 at this phase.
-        assert all(r.flag_points == 0 for r in rows)
-
-    def test_commit_false_defers_persistence(self):
-        """The engine calls materialize_round(commit=False) so the rows land in the
-        SAME commit as the round. Prove the rows are staged but not committed, so a
-        rollback (the failed-round path) discards them cleanly."""
-        team = make_team(color="Blue")
-        svc = make_service(team=team)
-        svc.points = 100
-        db.session.commit()
-        rnd = make_round(number=1)
-        make_check(service=svc, round_obj=rnd, result=True)
-
-        written = materialize_round(db.session, rnd.id, rnd.number, commit=False)
-        assert written == 1
-        # Visible within the uncommitted transaction...
-        assert db.session.query(RoundScore).filter(RoundScore.round_id == rnd.id).count() == 1
-        # ...but a rollback (failed-round cleanup) throws them away with the round.
-        db.session.rollback()
-        assert db.session.query(RoundScore).filter(RoundScore.round_id == rnd.id).count() == 0
-
-    def test_precomputed_points_match_the_queried_path(self):
-        """The engine passes points it accumulated in-memory instead of querying.
-        Both paths must write identical rows, or the fast engine path would drift
-        from the golden-equivalence guarantee."""
-        team_a = make_team(color="Blue")
-        team_b = make_team(color="Blue")
-        sa1 = make_service(team=team_a)
-        sa1.points = 100
-        sb1 = make_service(team=team_b)
-        sb1.points = 30
-        db.session.commit()
-        rnd = make_round(number=1)
-        make_check(service=sa1, round_obj=rnd, result=True)
-        make_check(service=sb1, round_obj=rnd, result=True)
-
-        queried = compute_round_service_points(db.session, rnd.id)
-        # Engine path: same sums, supplied directly, no query, no clear.
-        materialize_round(db.session, rnd.id, rnd.number, points_by_team=queried, clear_existing=False)
-        rows = {r.team_id: r.service_points for r in db.session.query(RoundScore).filter(RoundScore.round_id == rnd.id)}
-        assert rows == {team_a.id: 100, team_b.id: 30}
-        assert rows == queried
-
-    def test_zero_points_team_gets_no_row(self):
-        """A precomputed 0 (or missing) team must not create a row."""
-        team = make_team(color="Blue")
-        db.session.commit()
-        rnd = make_round(number=1)
-        written = materialize_round(db.session, rnd.id, rnd.number, points_by_team={team.id: 0}, clear_existing=False)
-        assert written == 0
-        assert db.session.query(RoundScore).filter(RoundScore.round_id == rnd.id).count() == 0
-
-    def test_is_idempotent_under_retry(self):
-        team = make_team(color="Blue")
-        svc = make_service(team=team)
-        svc.points = 100
-        db.session.commit()
-        rnd = make_round(number=1)
-        make_check(service=svc, round_obj=rnd, result=True)
-
+def test_pass_recovery_restores_fixed_points_once():
+    team = make_team(color="Blue")
+    service = make_service(team=team)
+    service.points = 75
+    db.session.commit()
+    rounds = [make_round(number=n) for n in range(1, 4)]
+    for rnd, result in zip(rounds, (True, False, True)):
+        make_check(service=service, round_obj=rnd, result=result)
         materialize_round(db.session, rnd.id, rnd.number)
-        materialize_round(db.session, rnd.id, rnd.number)  # retry: must not double-count
-        rows = db.session.query(RoundScore).filter(RoundScore.round_id == rnd.id).all()
-        assert len(rows) == 1
-        assert rows[0].service_points == 100
+    assert team_service_score(db.session, team.id) == 75
+    assert [r.service_points for r in db.session.query(ServiceScoreSnapshot).order_by(ServiceScoreSnapshot.round_number)] == [75, 0, 75]
 
-    def test_golden_equivalence_with_full_history_oracle(self):
-        """SUM(round_score.service_points) per team == the checks-based full-history
-        sum. Team.current_score now READS round_score, so it can't be the oracle
-        (that would be circular); the oracle is an explicit checks query, exactly
-        the computation round_score replaces. This is the invariant every later
-        phase depends on: build several teams, services with distinct point values,
-        and rounds with mixed pass/fail, then prove the two agree.
-        """
-        from scoring_engine.models.check import Check as _Check
 
-        def oracle(team_id):
-            return int(
-                db.session.query(db.func.coalesce(db.func.sum(Service.points), 0))
-                .select_from(Service)
-                .join(_Check)
-                .filter(Service.team_id == team_id)
-                .filter(_Check.result.is_(True))
-                .scalar()
-                or 0
-            )
+def test_materialize_all_rounds_rebuilds_sparse_history_and_live_state():
+    team = make_team(color="Blue")
+    service_a = make_service(team=team, name="SSH")
+    service_b = make_service(team=team, name="Web")
+    service_a.points = 100
+    service_b.points = 50
+    db.session.commit()
+    rounds = [make_round(number=n) for n in range(1, 4)]
+    make_check(service=service_a, round_obj=rounds[0], result=True)
+    make_check(service=service_b, round_obj=rounds[0], result=True)
+    make_check(service=service_a, round_obj=rounds[1], result=False)
+    make_check(service=service_b, round_obj=rounds[1], result=True)
+    make_check(service=service_a, round_obj=rounds[2], result=False)
+    make_check(service=service_b, round_obj=rounds[2], result=True)
 
-        teams = [make_team(color="Blue") for _ in range(3)]
-        # Give each team two services with distinct point values.
-        services = {}
-        for t in teams:
-            a = make_service(team=t, name=f"A-{t.id}")
-            b = make_service(team=t, name=f"B-{t.id}")
-            a.points = 100
-            b.points = 25
-            services[t.id] = (a, b)
-        db.session.commit()
+    materialize_all_rounds(db.session)
+    assert team_service_score(db.session, team.id) == 50
+    assert service_a.scoring_up is False
+    assert service_b.scoring_up is True
+    assert [team.get_round_scores(n) for n in (1, 2, 3)] == [150, 50, 50]
 
-        rounds = [make_round(number=n) for n in range(1, 6)]
-        # Deterministic pass/fail pattern so the test is not flaky.
-        for i, rnd in enumerate(rounds):
-            for t in teams:
-                a, b = services[t.id]
-                make_check(service=a, round_obj=rnd, result=(i % 2 == 0))
-                make_check(service=b, round_obj=rnd, result=(t.id % 2 == 0))
-            materialize_round(db.session, rnd.id, rnd.number)
 
-        for t in teams:
-            materialized = int(
-                db.session.query(db.func.coalesce(db.func.sum(RoundScore.service_points), 0))
-                .filter(RoundScore.team_id == t.id)
-                .scalar()
-            )
-            expected = oracle(t.id)
-            assert materialized == expected, f"team {t.id}: round_score {materialized} != oracle {expected}"
-            # And the model property, now backed by round_score, agrees with both.
-            assert t.current_score == expected
+def test_precomputed_points_match_queried_path_and_commit_false_rolls_back():
+    team = make_team(color="Blue")
+    service = make_service(team=team)
+    service.points = 100
+    db.session.commit()
+    rnd = make_round(number=1)
+    make_check(service=service, round_obj=rnd, result=True)
+    points = compute_round_service_points(db.session, rnd.id)
+    materialize_round(db.session, rnd.id, rnd.number, points_by_team=points, clear_existing=False, commit=False)
+    assert db.session.query(ServiceScoreSnapshot).filter_by(round_id=rnd.id).count() == 1
+    db.session.rollback()
+    assert db.session.query(ServiceScoreSnapshot).filter_by(round_id=rnd.id).count() == 0
 
-    def test_rolling_back_a_round_leaves_no_ghost_scores(self):
-        """Deleting rounds must delete their round_score rows (the rollback contract)."""
-        team = make_team(color="Blue")
-        svc = make_service(team=team)
-        svc.points = 100
-        db.session.commit()
-        r1 = make_round(number=1)
-        r2 = make_round(number=2)
-        make_check(service=svc, round_obj=r1, result=True)
-        make_check(service=svc, round_obj=r2, result=True)
-        materialize_round(db.session, r1.id, r1.number)
-        materialize_round(db.session, r2.id, r2.number)
-        assert db.session.query(RoundScore).count() == 2
 
-        # Simulate the rollback deletion contract (admin_rollback / _cleanup_failed_round).
-        db.session.query(RoundScore).filter(RoundScore.round_number >= 2).delete(synchronize_session=False)
-        db.session.commit()
-
-        remaining = db.session.query(RoundScore).all()
-        assert len(remaining) == 1
-        assert remaining[0].round_number == 1
+def test_team_without_a_passing_service_has_zero_score():
+    team = make_team(color="Blue")
+    service = make_service(team=team)
+    db.session.commit()
+    rnd = make_round(number=1)
+    make_check(service=service, round_obj=rnd, result=False)
+    assert compute_round_service_points(db.session, rnd.id) == {team.id: 0}
+    assert materialize_round(db.session, rnd.id, rnd.number) == 0
+    assert team_service_score(db.session, team.id) == 0

@@ -11,7 +11,7 @@ from scoring_engine.models.inject import Inject, InjectRubricScore
 from scoring_engine.models.round import Round
 from scoring_engine.models.setting import Setting
 from scoring_engine.models.team import Team
-from scoring_engine.sla import apply_dynamic_scoring_to_round, get_sla_config
+from scoring_engine.sla import get_sla_config
 
 from . import mod
 
@@ -53,8 +53,8 @@ def calculate_team_scores_with_dynamic_scoring(sla_config, freeze_time=None):
 
     Returns dict mapping team_id to total score with multipliers applied.
 
-    Reads from the materialized round_score table (see scoring_engine.scores)
-    rather than re-summing the full check history on every scoreboard render.
+    Reads the latest sparse service-state snapshots rather than re-summing the
+    full check history on every scoreboard render.
     ``freeze_time`` restricts to rounds closed at/before the wall-clock freeze.
     """
     from scoring_engine.scores import team_service_scores
@@ -70,16 +70,13 @@ def _get_bar_data_cached(anonymize, show_both, frozen_view=False):
     per user type (frozen_view distinguishes the white/live view from the frozen
     public view, which anonymize/show_both alone do not when anonymization is off).
     """
-    from scoring_engine.scores import get_freeze_time, team_adjustment_totals, team_penalties
+    from scoring_engine.scores import get_freeze_time, team_adjustment_totals
 
     freeze_time = get_freeze_time() if frozen_view else None
 
     sla_config = get_sla_config()
     current_scores = calculate_team_scores_with_dynamic_scoring(sla_config, freeze_time=freeze_time)
     adjustments = team_adjustment_totals(db.session, freeze_time=freeze_time)
-    # All teams' SLA penalties in a couple of grouped queries, rather than the
-    # per-service check scan calculate_team_total_penalties runs one team at a time.
-    penalties = team_penalties(db.session, sla_config) if sla_config.sla_enabled else {}
 
     inject_scores_visible = Setting.get_setting("inject_scores_visible")
     if inject_scores_visible and inject_scores_visible.value:
@@ -109,11 +106,8 @@ def _get_bar_data_cached(anonymize, show_both, frozen_view=False):
 
     team_colors = []
 
-    # Weighted scoring rebalances the categories that make up the combined total:
-    # service and inject are scaled by their weights before they are summed with
-    # manual adjustments. Adjustments are absolute point awards and are never
-    # weighted. Flag captures accrue to the red team only (see the flags API),
-    # so flag_weight does not enter the blue teams' totals here.
+    # Current-state service points are fixed and are not weighted. Keep the
+    # existing optional inject weighting for deployments that still use injects.
     weighted = sla_config.weighted_scoring_enabled
 
     blue_teams = db.session.query(Team).filter(Team.color == "Blue").order_by(Team.id).all()
@@ -129,30 +123,15 @@ def _get_bar_data_cached(anonymize, show_both, frozen_view=False):
 
         team_raw_service_scores.append(str(service_score))
         team_raw_inject_scores.append(str(inject_score))
-        if weighted:
-            weighted_service = int(round(service_score * sla_config.service_weight))
-            weighted_inject = int(round(inject_score * sla_config.inject_weight))
-        else:
-            weighted_service = service_score
-            weighted_inject = inject_score
+        weighted_service = service_score
+        weighted_inject = int(round(inject_score * sla_config.inject_weight)) if weighted else inject_score
         team_scores.append(str(weighted_service))
         team_inject_scores.append(str(weighted_inject))
         team_adjustments.append(str(adjustment))
 
-        # Calculate SLA penalties if enabled
-        # Total base score includes (weighted) service, inject, and manual adjustments
         total_base_score = weighted_service + weighted_inject + adjustment
-        if sla_config.sla_enabled:
-            penalty = penalties.get(blue_team.id, 0)
-            team_sla_penalties.append(str(penalty))
-            if sla_config.allow_negative:
-                adjusted = total_base_score - penalty
-            else:
-                adjusted = max(0, total_base_score - penalty)
-            team_adjusted_scores.append(str(adjusted))
-        else:
-            team_sla_penalties.append("0")
-            team_adjusted_scores.append(str(total_base_score))
+        team_sla_penalties.append("0")
+        team_adjusted_scores.append(str(total_base_score))
 
     team_data["labels"] = team_labels
     team_data["colors"] = team_colors
@@ -161,11 +140,11 @@ def _get_bar_data_cached(anonymize, show_both, frozen_view=False):
     team_data["sla_penalties"] = team_sla_penalties
     team_data["adjustments"] = team_adjustments
     team_data["adjusted_scores"] = team_adjusted_scores
-    team_data["sla_enabled"] = sla_config.sla_enabled
+    team_data["sla_enabled"] = False
     team_data["weighted_scoring_enabled"] = weighted
     if weighted:
         team_data["weights"] = {
-            "service": sla_config.service_weight,
+            "service": 1.0,
             "inject": sla_config.inject_weight,
             "flag": sla_config.flag_weight,
         }
@@ -216,19 +195,26 @@ def _get_line_data_cached(anonymize, show_both, frozen_view=False):
         db.session.query(Team.id, Team.name, Team.rgb_color).filter(Team.color == "Blue").order_by(Team.id).all()
     )
 
-    # Per-team, per-round points from the materialized round_score table (no
-    # full-history scan, no round_id->number lookup -- the number is stored).
-    from scoring_engine.models.round_score import RoundScore
+    # Per-team current-state snapshots (no full-history scan; round number is
+    # denormalized onto each snapshot).
+    from scoring_engine.models.service_score_snapshot import ServiceScoreSnapshot
 
-    round_query = db.session.query(RoundScore.team_id, RoundScore.round_number, RoundScore.service_points)
+    round_query = db.session.query(
+        ServiceScoreSnapshot.team_id,
+        ServiceScoreSnapshot.round_number,
+        ServiceScoreSnapshot.service_points,
+    )
     if freeze_time is not None:
-        round_query = round_query.join(Round, Round.id == RoundScore.round_id).filter(Round.round_end <= freeze_time)
-    round_scores = round_query.order_by(RoundScore.team_id, RoundScore.round_number).all()
+        round_query = round_query.join(
+            Round, Round.id == ServiceScoreSnapshot.round_id
+        ).filter(Round.round_end <= freeze_time)
+    round_scores = round_query.order_by(
+        ServiceScoreSnapshot.team_id, ServiceScoreSnapshot.round_number
+    ).all()
 
     scores_dict = defaultdict(lambda: defaultdict(int))
     for team_id, round_number, round_score in round_scores:
-        # Apply dynamic scoring multiplier if enabled
-        scores_dict[team_id][round_number] = apply_dynamic_scoring_to_round(round_number, round_score, sla_config)
+        scores_dict[team_id][round_number] = int(round_score or 0)
 
     # x-axis is every round (0..last_round), downsampled to a bounded set of
     # points shared by all teams.
@@ -245,19 +231,17 @@ def _get_line_data_cached(anonymize, show_both, frozen_view=False):
     for team_id, team_name, rgb_color in blue_teams:
         display_name = team_name_map.get(team_id, team_name)
         team_rounds = scores_dict[team_id]
-        # Cumulative score at each round. A round the team did not score in carries
-        # the previous total forward, so the series stays aligned to the rounds
-        # axis (accumulating only the scored rounds would drop points and shift the
-        # line left of where it belongs).
-        cumulative = []
-        running = 0
+        # Sparse snapshots carry forward until that team's current service state
+        # changes again. Scores may rise or fall; they are not cumulative.
+        timeline = []
+        current = 0
         for r in range(n):
-            running += team_rounds.get(r, 0)
-            cumulative.append(running)
+            current = team_rounds.get(r, current)
+            timeline.append(current)
         team_data["team"].append(
             {
                 "name": display_name,
-                "scores": [cumulative[i] for i in sampled],
+                "scores": [timeline[i] for i in sampled],
                 "color": rgb_color,
             }
         )

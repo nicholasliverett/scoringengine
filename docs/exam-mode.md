@@ -1,8 +1,8 @@
 # Individual practical exam mode
 
-This fork adds private, per-team participation flags. A Blue team uploads the
-text file installed on its assigned workstation from the login page. The flag
-can be used for repeated logins; the first successful submission records one
+This fork adds private, per-team participation flags. A Blue team pastes the
+contents of the text file installed on its assigned workstation into the Exam
+login page. The flag can be used for repeated logins; the first successful submission records one
 participation event and awards the configured attendance credit. A database
 unique constraint and one transaction protect the award from concurrent or
 repeated submissions.
@@ -12,6 +12,21 @@ round history. The public scoreboard, service/check pages, injects, flags,
 team data, and their APIs are unavailable to Blue users. White accounts retain
 the normal password login and instructor pages. Service checks, scoring, and
 the configured check ports continue to operate on the server.
+
+## Service scoring for the practical exam
+
+Each service contributes its configured point value once while its latest
+completed check passes. A failed check immediately changes that service to zero;
+a later pass restores its configured points. Repeated passing rounds do not add
+points. Dynamic scoring multipliers and SLA failure penalties remain available
+as status information, but do not change service score totals. Inject and manual
+adjustment points continue to be added separately.
+
+Threat-hunting checks should pass when the machine is in the expected clean
+state. For example, a check for an unauthorized SSH key should pass when that
+key is absent and fail while it exists. Availability checks for SSH or a website
+should pass while the service is reachable. Both use the same up/down scoring
+rule, with the configured service points controlling the value at stake.
 
 ## Configure attendance credit
 
@@ -71,7 +86,8 @@ generated export.
 
 - Use one Blue user per team; that account is the identity attached to its flag.
 - Keep white-team password authentication enabled for instructors.
-- The new Alembic revision is `011_add_exam_participation`.
+- The database revisions include `011_add_exam_participation` and
+  `012_current_state_service_scoring`.
 - The provisioning API is white-team-only, requires the normal authenticated
   session and CSRF protection, and validates every team before saving.
 - Export files are deliberately not emitted by `docker compose up`: flags are
