@@ -1,7 +1,7 @@
 import logging
 import secrets
 
-from flask import Flask, flash, jsonify, redirect, url_for
+from flask import Flask, flash, jsonify, redirect, request, url_for
 from flask_login import LoginManager, current_user
 from flask_wtf.csrf import CSRFError
 
@@ -188,6 +188,21 @@ def create_app():
     app.register_blueprint(about.mod)
     app.register_blueprint(announcements.mod)
     app.register_blueprint(health.mod)
+
+    @app.before_request
+    def restrict_student_portal():
+        """Keep Blue exam users inside their private Overview and Stats portal."""
+        if not current_user.is_authenticated or not current_user.is_blue_team:
+            return None
+        path = request.path
+        if path.startswith("/static/") or path in {
+            "/overview", "/stats", "/logout", "/api/exam/summary", "/api/exam/stats",
+            "/api/overview/get_round_data",
+        }:
+            return None
+        if path.startswith("/api/"):
+            return jsonify({"error": "not found"}), 404
+        return redirect(url_for("overview.home"))
 
     @app.errorhandler(CSRFError)
     def handle_csrf_error(error):

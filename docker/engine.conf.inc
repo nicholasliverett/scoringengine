@@ -64,3 +64,6 @@ redis_password =
 # nginx terminates TLS in front of the web container and 301s port 80 to 443,
 # so the session/remember-me cookies are always sent over HTTPS here.
 session_cookie_secure = True
+
+# Attendance credit awarded once per Blue team after its exam flag is accepted.
+exam_participation_points = 100

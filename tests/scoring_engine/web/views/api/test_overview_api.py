@@ -49,8 +49,10 @@ class TestOverviewAPI:
         self.red_user = User(username="reduser", password="testpass", team=self.red_team)
         db.session.add_all([self.white_user, self.blue_user, self.red_user])
         db.session.commit()
+        self._login("whiteuser")
 
     def _login(self, username):
+        self.client.get("/logout")
         return self.client.post(
             "/login",
             data={"username": username, "password": "testpass"},
@@ -116,12 +118,7 @@ class TestOverviewAPI:
 
         self._login("blueuser")
         resp = self.client.get("/api/overview/get_columns")
-        assert resp.status_code == 200
-        columns = resp.json["columns"]
-        team_titles = [c["title"] for c in columns[1:]]
-        # Blue team should NOT see real team names
-        assert "Blue Team" not in team_titles
-        assert "Blue Team 2" not in team_titles
+        assert resp.status_code == 404
 
     def test_anonymize_enabled_unauthenticated_sees_anonymous(self):
         """Unauthenticated users see only anonymous names when anonymize is enabled."""
@@ -130,13 +127,9 @@ class TestOverviewAPI:
         db.session.commit()
         Setting.clear_cache("anonymize_team_names")
 
+        self.client.get("/logout")
         resp = self.client.get("/api/overview/get_columns")
-        assert resp.status_code == 200
-        columns = resp.json["columns"]
-        team_titles = [c["title"] for c in columns[1:]]
-        # Should NOT see real team names
-        assert "Blue Team" not in team_titles
-        assert "Blue Team 2" not in team_titles
+        assert resp.status_code == 404
 
     # --- /api/overview/get_round_data ---
 
@@ -424,9 +417,7 @@ class TestOverviewAPI:
 
         self._login("blueuser")
         resp = self.client.get("/api/overview/get_data")
-        assert resp.status_code == 200
-        data = resp.json
-        assert "service_ids" not in data
+        assert resp.status_code == 404
 
     def test_get_data_anonymous_no_service_ids(self):
         """Anonymous users should not get service_ids."""
@@ -436,10 +427,9 @@ class TestOverviewAPI:
 
         self._create_round_with_checks(1, [svc1], [True])
 
+        self.client.get("/logout")
         resp = self.client.get("/api/overview/get_data")
-        assert resp.status_code == 200
-        data = resp.json
-        assert "service_ids" not in data
+        assert resp.status_code == 404
 
     # --- /api/overview/get_data returns data, not markup ---
 

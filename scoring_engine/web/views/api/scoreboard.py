@@ -1,8 +1,8 @@
 from collections import defaultdict
 from datetime import datetime, timezone
 
-from flask import jsonify
-from flask_login import current_user
+from flask import abort, jsonify, request
+from flask_login import current_user, login_required
 from sqlalchemy.sql import func
 
 from scoring_engine.cache import cache
@@ -14,6 +14,15 @@ from scoring_engine.models.team import Team
 from scoring_engine.sla import apply_dynamic_scoring_to_round, get_sla_config
 
 from . import mod
+
+
+@mod.before_request
+def white_team_only():
+    # The scoreboard and its JSON endpoints are private in the exam deployment.
+    if request.path.startswith("/api/scoreboard") and (
+        not current_user.is_authenticated or not current_user.is_white_team
+    ):
+        abort(404)
 
 
 def get_anonymize_mode():

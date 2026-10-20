@@ -20,10 +20,8 @@
      request, which in turn hangs a remember-token-deleting Set-Cookie on every
      response -- including the public scoreboard, the highest-traffic and most
      cacheable page in the app.
-     Nothing anonymous is state changing: the public pages (welcome,
-     scoreboard, overview, about, announcements, notifications) only issue GET
-     requests, and the one anonymous form -- login -- carries its own token via
-     the FlaskForm ``form.csrf_token`` field, independent of this tag. #}
+     Anonymous users can only view the welcome page and sign-in form. The
+     sign-in form carries its own token via FlaskForm, independent of this tag. #}
   {% if current_user.is_authenticated %}
   <meta name="csrf-token" content="{{ csrf_token() }}">
   {% endif %}
@@ -154,9 +152,11 @@
         updateThemePickerUI();
 
         // Initial badge check, then refresh via SSE (falls back to 30s polling)
+        {% if not current_user.is_authenticated or not current_user.is_blue_team %}
         updateAnnouncementsBadge();
         ScoringEngineSSE.on('announcement', updateAnnouncementsBadge);
         ScoringEngineSSE.on('round_complete', updateAnnouncementsBadge);
+        {% endif %}
       });
     </script>
 
@@ -176,14 +176,12 @@
         </button>
         <div id="navbar" class="collapse navbar-collapse">
           <ul class="navbar-nav me-auto">
+            {% if current_user.is_authenticated and current_user.is_white_team %}
             <li class="nav-item"><a class="nav-link {% if request.path == '/scoreboard' %}active{% endif %}" href="{{ url_for('scoreboard.home') }}">Scoreboard</a></li>
+            {% endif %}
             <li class="nav-item"><a class="nav-link {% if request.path == '/overview' %}active{% endif %}" href="{{ url_for('overview.home') }}">Overview</a></li>
             {% if current_user.is_authenticated %}
-              {% if current_user.is_blue_team %}
-              <li class="nav-item"><a class="nav-link {% if request.path == '/services' or request.path.startswith('/service/') %}active{% endif %}"
-                  href="{{ url_for('services.home') }}">Services</a></li>
-              {% endif %}
-              {% if current_user.is_blue_team or current_user.is_red_team %}
+              {% if current_user.is_red_team %}
               <li class="nav-item"><a class="nav-link {% if request.path == '/injects' or request.path.startswith('/inject') %}active{% endif %}"
                   href="{{ url_for('injects.home') }}">Injects</a></li>
               {% endif %}
@@ -202,6 +200,7 @@
             {% endif %}
             </ul>
             <ul class="navbar-nav">
+              {% if not (current_user.is_authenticated and current_user.is_blue_team) %}
               <li class="nav-item">
                 <a class="nav-link {% if request.path == '/announcements' %}active{% endif %}" href="{{ url_for('announcements.home') }}" id="announcements-link" title="Announcements">
                   <i class="bi bi-megaphone"></i>
@@ -211,6 +210,7 @@
                   </span>
                 </a>
               </li>
+              {% endif %}
               {% if not current_user.is_authenticated %}
               <li class="nav-item"><a class="nav-link" href="{{ url_for('auth.login') }}">Login</a></li>
               {% else %}
@@ -225,13 +225,14 @@
                   {% endif %}
                   {{ current_user.get_username }}</a>
                 <ul class="dropdown-menu dropdown-menu-end">
-                  <li><a class="dropdown-item" href="{{ url_for('profile.home') }}">Profile</a></li>
+                  {% if not current_user.is_blue_team %}<li><a class="dropdown-item" href="{{ url_for('profile.home') }}">Profile</a></li>{% endif %}
                   <li><hr class="dropdown-divider"></li>
                   <li><a class="dropdown-item" href="{{ url_for('auth.logout') }}">Logout</a></li>
                 </ul>
               </li>
               {% endif %}
-              <li class="nav-item"><a class="nav-link" href="{{ url_for('about.about') }}">About</a></li>
+              {% if not (current_user.is_authenticated and current_user.is_blue_team) %}<li class="nav-item"><a class="nav-link" href="{{ url_for('about.about') }}">About</a></li>{% endif %}
+              {% if not (current_user.is_authenticated and current_user.is_blue_team) %}
               <li class="nav-item dropdown">
                 <button class="btn nav-link dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" title="Theme">
                   <i class="bi bi-palette"></i>
@@ -265,6 +266,7 @@
                   </a></li>
                 </ul>
               </li>
+              {% endif %}
             </ul>
           </div>
           <!--/.nav-collapse -->
@@ -284,7 +286,7 @@
           <a href="https://github.com/scoringengine/scoringengine" class="text-muted text-decoration-none"><i class="bi bi-github"></i> GitHub</a>
         </small>
       </footer>
-  <script>ScoringEngineSSE.connect();</script>
+  {% if not current_user.is_authenticated or not current_user.is_blue_team %}<script>ScoringEngineSSE.connect();</script>{% endif %}
   </body>
 
 </html>

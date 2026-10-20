@@ -1,6 +1,6 @@
 from collections import defaultdict
 
-from flask import jsonify
+from flask import abort, jsonify, request
 from flask_login import current_user
 from sqlalchemy.sql import func
 
@@ -14,6 +14,16 @@ from scoring_engine.models.team import Team
 from scoring_engine.sla import get_sla_config
 
 from . import make_cache_key, mod
+
+
+@mod.before_request
+def private_exam_overview():
+    if not request.path.startswith("/api/overview/"):
+        return None
+    if not current_user.is_authenticated or not (current_user.is_blue_team or current_user.is_white_team):
+        abort(404)
+    if current_user.is_blue_team and request.path != "/api/overview/get_round_data":
+        abort(404)
 
 
 def get_anonymize_mode():

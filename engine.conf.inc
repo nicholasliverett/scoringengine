@@ -130,3 +130,6 @@ weighted_scoring_enabled = False
 service_weight = 1.0
 inject_weight = 1.0
 flag_weight = 1.0
+
+# Attendance credit awarded once per Blue team after its flag is accepted.
+exam_participation_points = 100

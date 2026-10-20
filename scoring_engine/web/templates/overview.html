@@ -2,6 +2,23 @@
 {% block title %}Overview{% endblock %}
 {% block content %}
 <div class="page-wrap">
+    {% if current_user.is_blue_team %}
+    <div class="page-title-bar"><h1 class="page-title">Your Exam Points</h1><span class="page-subtitle">Private score summary</span></div>
+    <div class="stat-cards-row">
+        <div class="stat-card"><div class="stat-label">Total points</div><div class="stat-value" id="exam-total">—</div></div>
+        <div class="stat-card"><div class="stat-label">Service points</div><div class="stat-value" id="exam-service">—</div></div>
+        <div class="stat-card"><div class="stat-label">Attendance credit</div><div class="stat-value" id="exam-attendance">—</div><div class="stat-detail" id="exam-attendance-status">Loading</div></div>
+    </div>
+    <p class="text-muted">Your scores are private to your team.</p>
+    <script>
+      $.getJSON('/api/exam/summary').done(function(data) {
+        $('#exam-total').text(Number(data.total).toLocaleString());
+        $('#exam-service').text(Number(data.service).toLocaleString());
+        $('#exam-attendance').text(Number(data.participation_points).toLocaleString());
+        $('#exam-attendance-status').text(data.participation_awarded ? 'Participation recorded' : 'Not recorded');
+      });
+    </script>
+    {% else %}
     <!-- Page title bar -->
     <div class="page-title-bar">
         <h1 class="page-title">Overview</h1>
@@ -215,4 +232,5 @@
     });
     ScoringEngineSSE.on('settings_changed', refreshRound);
 </script>
+    {% endif %}
 {% endblock %}

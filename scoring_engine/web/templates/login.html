@@ -6,6 +6,17 @@
 {% endblock %}
 {% block content %}
 <div class="page-wrap">
+    <section class="form-signin mb-4">
+        <h2 class="form-signin-heading">Exam participation</h2>
+        <p>Upload the flag file from your assigned workstation to sign in and record your participation.</p>
+        <form method="POST" action="{{ url_for('auth.flag_login') }}" enctype="multipart/form-data">
+            {{ flag_form.csrf_token }}
+            <label for="flag_file" class="form-label">Flag file</label>
+            {{ flag_form.flag_file(class="form-control mb-3", required=true, accept=".txt,text/plain", autofocus=true) }}
+            <button class="btn btn-lg btn-primary w-100" type="submit">Continue with exam flag</button>
+        </form>
+    </section>
+    <div class="form-signin-heading text-center mb-3">Other users</div>
     <form method="POST" role="form" class="form-signin">
         {{ form.csrf_token }}
         <h2 class="form-signin-heading">Please sign in</h2>

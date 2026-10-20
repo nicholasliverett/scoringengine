@@ -8,6 +8,23 @@
 {% endblock %}
 {% block content %}
 <div class="page-wrap">
+    {% if current_user.is_blue_team %}
+    <h1 class="page-title">Your Point History</h1>
+    <div class="stat-cards-row">
+        <div class="stat-card"><div class="stat-label">Current total</div><div class="stat-value" id="stats-total">—</div></div>
+        <div class="stat-card"><div class="stat-label">Attendance credit</div><div class="stat-value" id="stats-attendance">—</div></div>
+    </div>
+    <div class="chart-card"><table class="table"><thead><tr><th>Round</th><th>Service points</th></tr></thead><tbody id="exam-rounds"></tbody></table></div>
+    <script>
+      $.getJSON('/api/exam/stats').done(function(data) {
+        $('#stats-total').text(Number(data.score.total).toLocaleString());
+        $('#stats-attendance').text(Number(data.score.participation_points).toLocaleString());
+        (data.rounds || []).slice().reverse().forEach(function(row) {
+          $('#exam-rounds').append('<tr><td>' + Number(row.round) + '</td><td>' + Number(row.points).toLocaleString() + '</td></tr>');
+        });
+      });
+    </script>
+    {% else %}
     {% if current_user.is_white_team %}
     <!-- Scoring Overview (White Team Only) -->
     <div class="d-flex justify-content-between align-items-center">
@@ -204,4 +221,5 @@
         }
     });
 </script>
+    {% endif %}
 {% endblock %}

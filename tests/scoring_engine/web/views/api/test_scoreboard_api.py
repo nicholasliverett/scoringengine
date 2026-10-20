@@ -33,8 +33,10 @@ class TestScoreboardAPI:
         self.red_user = User(username="reduser", password="testpass", team=self.red_team)
         db.session.add_all([self.white_user, self.blue_user, self.red_user])
         db.session.commit()
+        self.login("whiteuser")
 
     def login(self, username, password="testpass"):
+        self.client.get("/logout")
         return self.client.post(
             "/login",
             data={"username": username, "password": password},
@@ -318,11 +320,7 @@ class TestScoreboardAPI:
 
         self.login("blueuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
-        assert resp.status_code == 200
-        data = resp.json
-        # Blue team should see anonymous names, not real names
-        for label in data["labels"]:
-            assert "Blue Team" not in label
+        assert resp.status_code == 404
 
     def test_get_bar_data_anonymize_white_team(self):
         """White team sees both real and anonymous names when anonymize is enabled."""
@@ -354,10 +352,7 @@ class TestScoreboardAPI:
 
         self.login("blueuser")
         resp = self.client.get("/api/scoreboard/get_line_data")
-        assert resp.status_code == 200
-        data = resp.json
-        for team in data["team"]:
-            assert "Blue Team" not in team["name"]
+        assert resp.status_code == 404
 
     def test_get_line_data_anonymize_white_team(self):
         """White team sees both names in line data when anonymize is enabled."""

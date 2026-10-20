@@ -9,6 +9,7 @@ from scoring_engine.models.property import Property
 from scoring_engine.models.round import Round
 from scoring_engine.models.round_score import RoundScore
 from scoring_engine.models.score_adjustment import ScoreAdjustment
+from scoring_engine.models.exam_credential import ExamCredential, ExamParticipation
 from scoring_engine.models.service import Service
 from scoring_engine.models.team import Team
 from scoring_engine.models.user import User

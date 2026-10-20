@@ -204,6 +204,7 @@ services:
       # Flask session signing key. Required to scale this service past one
       # replica and to keep users logged in across restarts. See .env.example.
       - SCORINGENGINE_SECRET_KEY
+      - SCORINGENGINE_EXAM_PARTICIPATION_POINTS
 
 volumes:
   check_outputs:

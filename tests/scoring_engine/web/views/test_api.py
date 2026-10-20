@@ -107,6 +107,7 @@ class TestAPI:
     """
 
     def test_overview_data_no_teams(self):
+        self.login("testuser")
         overview_data = self.client.get("/api/overview/data")
         assert json.loads(overview_data.data.decode("utf8")) == {}
 
@@ -258,6 +259,7 @@ class TestAPI:
             db.session.commit()
             teams.append(team)
 
+        self.login("testuser")
         overview_data = self.client.get("/api/overview/data")
         overview_dict = json.loads(overview_data.data.decode("utf8"))
         expected_dict = {
@@ -389,6 +391,7 @@ class TestAPI:
         db.session.add_all([check1, check2])
         db.session.commit()
 
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -442,6 +445,7 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -525,6 +529,7 @@ class TestAPI:
         db.session.commit()
         recompute_consecutive_failures_cache(db.session)
 
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -756,6 +761,7 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -806,6 +812,7 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -848,6 +855,7 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -895,6 +903,7 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/overview/get_data")
         assert resp.status_code == 200
         data = resp.json
@@ -1121,6 +1130,7 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -1201,6 +1211,7 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -1377,6 +1388,7 @@ class TestAPI:
         cache.clear()
 
         # Call the API
+        self.login("testuser")
         resp = self.client.get("/api/overview/get_data")
         assert resp.status_code == 200
         data = resp.json
@@ -1460,6 +1472,7 @@ class TestAPI:
 
         cache.clear()
 
+        self.login("testuser")
         resp = self.client.get("/api/overview/get_data")
         assert resp.status_code == 200
         data = resp.json
@@ -1572,6 +1585,7 @@ class TestAPI:
 
         cache.clear()
 
+        self.login("testuser")
         resp = self.client.get("/api/overview/get_data")
         assert resp.status_code == 200
         data = resp.json
