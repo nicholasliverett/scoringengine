@@ -57,8 +57,8 @@ This writes `generated-exam/competition.yaml` and
 `generated-exam/blue-team-credentials.csv`. The source YAML is not changed. The
 generator replaces the Blue teams in its output with `Team1` through `Team24`,
 keeps the White and Red teams, and copies the selected template team's services,
-checks, points, and environments to every generated team. Each team gets one
-unique word-based username and an eight-word password. The output directory and
+checks, points, and environments to every generated team. Each team gets a
+`team1`, `team2`, etc. username and a four-word, hyphen-separated password. The output directory and
 files receive owner-only POSIX permissions where supported; the directory is
 also ignored by Git because the CSV contains plaintext passwords. The generator
 refuses to overwrite its output unless `--force` is supplied.

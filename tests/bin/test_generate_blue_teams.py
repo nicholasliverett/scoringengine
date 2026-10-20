@@ -59,6 +59,7 @@ def test_builds_one_user_per_team_and_clones_template(source_data):
     blue_teams = [team for team in result["teams"] if team["color"] == "Blue"]
     assert len(blue_teams) == 3
     assert all(len(team["users"]) == 1 for team in blue_teams)
+    assert [team["users"][0]["username"] for team in blue_teams] == ["team1", "team2", "team3"]
     assert [team["services"][0]["host"] for team in blue_teams] == [
         "ssh-001.exam.local",
         "ssh-002.exam.local",
@@ -67,9 +68,9 @@ def test_builds_one_user_per_team_and_clones_template(source_data):
     assert all(team["services"][1]["host"] == "shared-web.exam.local" for team in blue_teams)
     assert all(team["services"][0]["points"] == 100 for team in blue_teams)
     assert [row["team_name"] for row in credentials] == ["Team1", "Team2", "Team3"]
-    assert len({row["username"] for row in credentials}) == 3
+    assert [row["username"] for row in credentials] == ["team1", "team2", "team3"]
     assert len({row["password"] for row in credentials}) == 3
-    assert all(len(row["password"].split("-")) == generator.PASSWORD_WORD_COUNT for row in credentials)
+    assert all(len(row["password"].split("-")) == 4 for row in credentials)
     assert all(len(row["password"].encode("utf-8")) <= 72 for row in credentials)
     assert host_count == 1
     assert result["flags"] == source_data["flags"]
@@ -130,6 +131,12 @@ def test_rejects_malformed_source_team(source_data):
 def test_rejects_generated_team_name_collision(source_data):
     source_data["teams"][0]["name"] = "Team1"
     with pytest.raises(ValueError, match="collide"):
+        generator.build_competition(source_data, 2)
+
+
+def test_rejects_generated_username_collision(source_data):
+    source_data["teams"][0]["users"][0]["username"] = "team1"
+    with pytest.raises(ValueError, match="generated username 'team1' collides"):
         generator.build_competition(source_data, 2)
 
 

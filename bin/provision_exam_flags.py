@@ -38,6 +38,30 @@ def request(opener, url, data=None, headers=None):
     return opener.open(req, timeout=20)
 
 
+def http_error_detail(error):
+    """Return a concise, useful message from a non-2xx API response."""
+    try:
+        body = error.read().decode("utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if not body:
+        return ""
+
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        detail = payload.get("error") or payload.get("message")
+        if isinstance(detail, str) and detail.strip():
+            return " ".join(detail.split())[:500]
+
+    # Avoid dumping a whole HTML error page (or any large response) to a
+    # terminal while preserving the server's short explanation.
+    text = re.sub(r"<[^>]*>", " ", body)
+    return " ".join(text.split())[:500]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", required=True, help="Scoring Engine URL, e.g. https://exam.example.edu")
@@ -118,17 +142,39 @@ def main():
             "username": args.username,
             "password": password,
         }).encode()
-        request(opener, base_url + "/login", data=form, headers={"Content-Type": "application/x-www-form-urlencoded"})
+        request(opener, base_url + "/login", data=form, headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            # Flask-WTF requires a same-origin Referer for HTTPS POSTs.
+            "Referer": base_url + "/login",
+        })
         payload = json.dumps({"credentials": secrets_to_register, "rotate": args.rotate}).encode()
         response = request(opener, base_url + "/api/admin/exam/credentials", data=payload, headers={
-            "Content-Type": "application/json", "X-CSRFToken": csrf_parser.token,
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrf_parser.token,
+            "Referer": base_url + "/admin/status",
         })
         result = json.loads(response.read().decode("utf-8"))
         if response.status != 200:
             raise RuntimeError(result.get("error", "registration failed"))
-    except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError, ValueError) as exc:
+    except urllib.error.HTTPError as exc:
+        detail = http_error_detail(exc)
+        suffix = f": {detail}" if detail else ""
+        print(f"Provisioning failed: HTTP {exc.code} {exc.reason}{suffix}", file=sys.stderr)
+        print(
+            "Local flag files were written and may not be registered. Keep them private; "
+            "rerun with the same output directory after fixing the error. Use --rotate "
+            "only when intentionally replacing existing flags.",
+            file=sys.stderr,
+        )
+        return 1
+    except (urllib.error.URLError, RuntimeError, ValueError) as exc:
         print(f"Provisioning failed: {exc}", file=sys.stderr)
-        print("Flag files were written locally. Keep them private; rerun with --rotate if the API state is uncertain.", file=sys.stderr)
+        print(
+            "Local flag files were written and may not be registered. Keep them private; "
+            "rerun with the same output directory after fixing the error. Use --rotate "
+            "only when intentionally replacing existing flags.",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"Provisioned {len(rows)} exam flag files in {args.output_dir}.")

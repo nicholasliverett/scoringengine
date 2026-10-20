@@ -23,10 +23,10 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SOURCE = ROOT / "bin" / "competition.yaml"
 DEFAULT_OUTPUT = ROOT / "generated-exam"
 MAX_TEAMS = 1000
-PASSWORD_WORD_COUNT = 8
+PASSWORD_WORD_COUNT = 4
 
 # Short, plain ASCII words keep passphrases easy to read and below bcrypt's
-# 72-byte input limit even when all eight words are at their maximum length.
+# 72-byte input limit even when all four words are at their maximum length.
 WORDS = tuple(
     """
     amber anchor apple apron arch arrow ash atlas aurora autumn badger bamboo
@@ -53,12 +53,11 @@ HOST_TOKENS = ("{team_number}", "{team_number_padded}", "{team_name}")
 
 
 def generate_username(team_number, used_usernames):
-    suffix = f"-{team_number:03d}"
-    while True:
-        username = f"{secrets.choice(WORDS)}-{secrets.choice(WORDS)}{suffix}"
-        if username not in used_usernames:
-            used_usernames.add(username)
-            return username
+    username = f"team{team_number}"
+    if username in used_usernames:
+        raise ValueError(f"generated username '{username}' collides with a non-Blue team user")
+    used_usernames.add(username)
+    return username
 
 
 def generate_password(used_passwords):
