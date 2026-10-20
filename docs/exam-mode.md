@@ -8,7 +8,8 @@ unique constraint and one transaction protect the award from concurrent or
 repeated submissions.
 
 Blue users see only Overview and Stats. These pages show their own points and
-round history. The public scoreboard, service/check pages, injects, flags,
+anonymous Finding 1, Finding 2, etc. statuses from each check's latest result;
+they do not show service names or round-by-round check history. The public scoreboard, service/check pages, injects, flags,
 team data, and their APIs are unavailable to Blue users. White accounts retain
 the normal password login and instructor pages. Service checks, scoring, and
 the configured check ports continue to operate on the server.
@@ -32,16 +33,74 @@ rule, with the configured service points controlling the value at stake.
 
 The default is 100 points. Set `exam_participation_points` under `[OPTIONS]` in
 `engine.conf` (or set `SCORINGENGINE_EXAM_PARTICIPATION_POINTS`) to change it.
-Non-positive values are treated as zero. For an existing installation, apply
-the new database migration before the exam:
+Non-positive values are treated as zero. When deploying this fork to an existing
+installation, rebuild and start the Compose stack so bootstrap applies pending
+database migrations before the web and engine containers start:
 
 ```sh
-docker compose build bootstrap
-docker compose run --rm --no-deps --entrypoint python bootstrap /app/bin/migrate
+docker compose up -d --build
 ```
 
-For a fresh database, the normal bootstrap creates all model tables and stamps
-the current Alembic head.
+Whenever bootstrap runs, it applies pending migrations. For a fresh database,
+it creates all model tables and stamps the current Alembic head.
+
+## Generate Blue teams and logins
+
+The source `bin/competition.yaml` is also where the checks for every Blue team
+are defined. Generate a fresh config and a private CSV with one login per team:
+
+```sh
+python bin/generate_blue_teams.py 24 --template-team Team1
+```
+
+This writes `generated-exam/competition.yaml` and
+`generated-exam/blue-team-credentials.csv`. The source YAML is not changed. The
+generator replaces the Blue teams in its output with `Team1` through `Team24`,
+keeps the White and Red teams, and copies the selected template team's services,
+checks, points, and environments to every generated team. Each team gets one
+unique word-based username and an eight-word password. The output directory and
+files receive owner-only POSIX permissions where supported; the directory is
+also ignored by Git because the CSV contains plaintext passwords. The generator
+refuses to overwrite its output unless `--force` is supplied.
+
+For separate machines, put a placeholder in each template service's `host`
+value before generating. For example:
+
+```yaml
+host: ssh-team{team_number}.exam.example.edu
+```
+
+The generator substitutes `{team_number}` (`1`, `2`, ...),
+`{team_number_padded}` (`001`, `002`, ...), or `{team_name}` (`Team1`,
+`Team2`, ...) in service hosts. Any host without a placeholder is copied as-is,
+so all teams will check the same target for that service. Use the template that
+has the check definitions and host pattern you want; `--source path/to/file.yaml`
+can select a different source YAML.
+
+For the five-machine test range `192.168.1.10` through `192.168.1.14`, use the
+included SSH-only template:
+
+```sh
+python bin/generate_blue_teams.py 5 \
+  --source configs/competition-ssh-template.yaml \
+  --template-team Team1 \
+  --host-number-offset 9
+```
+
+This keeps generated teams named `Team1` to `Team5` and renders the SSH hosts as
+`.10` through `.14`. The SSH check logs in as `scoringcheck` and runs `id`; set
+that same account and password on each test machine, or edit the template's
+service account to match the machines. The attendance-login usernames and
+passwords are generated separately in the credentials CSV. The check matches
+the `SUCCESS` marker emitted after a successful SSH login and command run.
+
+For a new database, review the generated YAML and copy it to
+`bin/competition.yaml` before the initial Compose setup. The setup script reads
+that file only while creating the database. Changing it after the database has
+been initialized does not update existing teams or services. The generator
+does not edit a running application or create attendance flags; use
+`bin/provision_exam_flags.py` after the teams exist, with the team-ID-to-machine
+inventory needed to install each flag.
 
 ## Provision flags
 

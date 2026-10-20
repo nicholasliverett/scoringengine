@@ -1,6 +1,7 @@
 # Common ignores
 *.pyc
 exam-flags/
+generated-exam/
 *.swp
 *.swo
 

@@ -6,11 +6,12 @@ import re
 from flask import jsonify, request
 from flask_login import current_user, login_required
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.sql import func
 
 from scoring_engine.db import db
+from scoring_engine.models.check import Check
 from scoring_engine.models.exam_credential import ExamCredential
-from scoring_engine.models.round import Round
-from scoring_engine.models.service_score_snapshot import ServiceScoreSnapshot
+from scoring_engine.models.service import Service
 from scoring_engine.models.setting import Setting
 from scoring_engine.models.team import Team
 from scoring_engine.models.user import User
@@ -46,6 +47,34 @@ def _own_score(team_id):
             "adjustments": int(adjustment), "sla_penalty": 0}
 
 
+def _own_findings(team_id):
+    """Return only the latest completed status for each of this team's checks.
+
+    Service names and check details are intentionally hidden from Blue users.
+    The ordinal labels are stable because their services are ordered by ID.
+    """
+    latest_checks = (
+        db.session.query(Check.service_id, func.max(Check.id).label("check_id"))
+        .filter(Check.completed.is_(True))
+        .group_by(Check.service_id)
+        .subquery()
+    )
+    rows = (
+        db.session.query(Check.result)
+        .select_from(Service)
+        .outerjoin(latest_checks, latest_checks.c.service_id == Service.id)
+        .outerjoin(Check, Check.id == latest_checks.c.check_id)
+        .filter(Service.team_id == team_id)
+        .order_by(Service.id)
+        .all()
+    )
+    findings = [
+        {"name": f"Finding {index}", "passing": None if row[0] is None else bool(row[0])}
+        for index, row in enumerate(rows, start=1)
+    ]
+    return findings, sum(finding["passing"] is True for finding in findings)
+
+
 @mod.route("/api/exam/summary")
 @login_required
 def exam_summary():
@@ -57,6 +86,7 @@ def exam_summary():
     participation = db.session.query(ExamParticipation).filter_by(team_id=current_user.team_id).one_or_none()
     points["participation_awarded"] = participation is not None
     points["participation_points"] = participation.score_adjustment.points if participation else 0
+    points["findings"], points["findings_passing"] = _own_findings(current_user.team_id)
     return jsonify(points)
 
 
@@ -65,25 +95,13 @@ def exam_summary():
 def exam_stats():
     if not current_user.is_blue_team:
         return jsonify({"error": "forbidden"}), 403
-    scoring = get_sla_config()
-    rows = db.session.query(
-        ServiceScoreSnapshot.round_number, ServiceScoreSnapshot.service_points
-    ).filter(ServiceScoreSnapshot.team_id == current_user.team_id).order_by(
-        ServiceScoreSnapshot.round_number
-    ).all()
-    state_by_round = dict(rows)
-    rounds = []
-    points = 0
-    for number in range(1, Round.get_last_round_num() + 1):
-        points = int(state_by_round.get(number, points) or 0)
-        rounds.append({"round": number, "points": points})
-    # Expose the student's own awarded attendance credit and total only.
     from scoring_engine.models.exam_credential import ExamParticipation
 
     score = _own_score(current_user.team_id)
     participation = db.session.query(ExamParticipation).filter_by(team_id=current_user.team_id).one_or_none()
     score["participation_points"] = participation.score_adjustment.points if participation else 0
-    return jsonify({"rounds": rounds, "score": score})
+    score["findings"], score["findings_passing"] = _own_findings(current_user.team_id)
+    return jsonify(score)
 
 
 @mod.route("/api/admin/exam/credentials", methods=["POST"])

@@ -1,0 +1,36 @@
+# Five-machine SSH test template.
+# Generate the five teams with:
+# python bin/generate_blue_teams.py 5 --source configs/competition-ssh-template.yaml --template-team Team1 --host-number-offset 9
+# Change the sample White/Red passwords before a real exam. Set the scoringcheck
+# account below to a password configured on all five machines.
+teams:
+  - name: WhiteTeam
+    color: White
+    users:
+      - username: whiteteamuser
+        password: testpass
+  - name: RedTeam
+    color: Red
+    users:
+      - username: redteamuser
+        password: testpass
+  - name: Team1
+    color: Blue
+    users:
+      - username: template-user
+        password: replaced-by-generator
+    services:
+      - name: SSH
+        check_name: SSHCheck
+        host: "192.168.1.{team_number}"
+        port: 22
+        points: 100
+        accounts:
+          - username: scoringcheck
+            password: ChangeMeOnAllFiveMachines!
+        environments:
+          - matching_content: SUCCESS
+            properties:
+              - name: commands
+                value: id
+flags: []

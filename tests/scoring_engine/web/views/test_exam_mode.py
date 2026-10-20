@@ -50,28 +50,42 @@ def test_flag_login_reuses_credential_but_awards_once(test_client, db_session):
     assert summary["total"] == 100
 
 
-def test_exam_stats_show_current_service_points_not_accumulated_points(blue_login, db_session):
+def test_exam_stats_show_latest_anonymized_finding_status_only(blue_login, db_session):
     from tests.scoring_engine.factories import make_check, make_round
     from scoring_engine.scores import materialize_round
 
     client, teams = blue_login
     team = teams["blue_team"]
-    service = Service(name="SSH", team=team, check_name="SSHCheck", host="exam-host", points=125)
+    service = Service(name="Sensitive SSH Check", team=team, check_name="SSHCheck", host="exam-host", points=125)
+    failed_service = Service(name="Sensitive Beacon Check", team=team, check_name="AgentCheck", host="exam-host", points=25)
+    unchecked_service = Service(name="Sensitive User Check", team=team, check_name="AgentCheck", host="exam-host", points=30)
     db.session.add(service)
+    db.session.add(failed_service)
+    db.session.add(unchecked_service)
     db.session.commit()
 
-    expected = [125, 125, 0, 125]
     for number, result in enumerate((True, True, False, True), start=1):
         rnd = make_round(number=number)
         make_check(service=service, round_obj=rnd, result=result)
+        make_check(service=failed_service, round_obj=rnd, result=False)
         materialize_round(db.session, rnd.id, rnd.number)
 
     response = client.get("/api/exam/stats")
     assert response.status_code == 200
     data = response.get_json()
-    assert [row["points"] for row in data["rounds"]] == expected
-    assert data["score"]["service"] == 125
-    assert data["score"]["total"] == 125
+    assert "rounds" not in data
+    assert data["service"] == 125
+    assert data["total"] == 125
+    assert data["findings_passing"] == 1
+    assert data["findings"] == [
+        {"name": "Finding 1", "passing": True},
+        {"name": "Finding 2", "passing": False},
+        {"name": "Finding 3", "passing": None},
+    ]
+    response_text = response.get_data(as_text=True)
+    assert "Sensitive SSH Check" not in response_text
+    assert "Sensitive Beacon Check" not in response_text
+    assert "Sensitive User Check" not in response_text
 
 
 def test_concurrent_flag_uploads_award_once(app, db_session):
@@ -123,8 +137,14 @@ def test_exam_login_uses_paste_field_and_other_users_page(test_client):
 
 def test_blue_portal_hides_scoreboard_and_service_apis(blue_login):
     client, _ = blue_login
-    assert client.get("/overview").status_code == 200
-    assert client.get("/stats").status_code == 200
+    overview = client.get("/overview")
+    stats = client.get("/stats")
+    assert overview.status_code == 200
+    assert stats.status_code == 200
+    assert b"Latest finding status" in overview.data
+    assert b"Latest finding status" in stats.data
+    assert b"Your Point History" not in stats.data
+    assert b"exam-rounds" not in stats.data
     assert client.get("/scoreboard").status_code == 302
     assert client.get("/services").status_code == 302
     assert client.get("/api/scoreboard/get_bar_data").status_code == 404
