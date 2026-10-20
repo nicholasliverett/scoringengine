@@ -53,7 +53,10 @@ def http_error_detail(error):
     except ValueError:
         payload = None
     if isinstance(payload, dict):
-        detail = payload.get("error") or payload.get("message")
+        # The CSRF handler returns a generic ``error`` plus a useful ``reason``
+        # (for example, whether the token or session cookie was missing). Show
+        # the specific reason first so operators can diagnose rejected logins.
+        detail = payload.get("reason") or payload.get("error") or payload.get("message")
         if isinstance(detail, str) and detail.strip():
             return " ".join(detail.split())[:500]
 

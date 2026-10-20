@@ -76,12 +76,12 @@ def test_http_error_body_is_shown_without_rotating_flags(tmp_path, monkeypatch, 
             400,
             "BAD REQUEST",
             {},
-            io.BytesIO(b'{"error":"CSRF validation failed"}'),
+            io.BytesIO(b'{"error":"CSRF validation failed",' b'"reason":"The CSRF session token is missing."}'),
         )
 
     result, output_dir, captured = run_provisioner(tmp_path, monkeypatch, fake_request, capsys)
 
     assert result == 1
-    assert "CSRF validation failed" in captured.err
+    assert "The CSRF session token is missing." in captured.err
     assert "Use --rotate only when intentionally replacing existing flags" in (captured.err)
     assert len(list(output_dir.glob("team-*.txt"))) == 1

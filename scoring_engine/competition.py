@@ -10,6 +10,7 @@ from scoring_engine.engine.engine import Engine
 from scoring_engine.logger import logger
 from scoring_engine.models.account import Account
 from scoring_engine.models.environment import Environment
+from scoring_engine.models.exam_credential import ExamCredential
 from scoring_engine.models.flag import Flag, Platform
 from scoring_engine.models.property import Property
 from scoring_engine.models.service import Service
@@ -63,6 +64,13 @@ class Competition(dict):
         assert type(team["users"]) is list, "'{0}' 'users' field must be an array".format(team["name"])
         for user in team["users"]:
             self.verify_user_data(user, team["name"])
+
+        if "exam_flag_hash" in team:
+            assert team["color"] == "Blue", "exam flags may only be assigned to Blue teams"
+            assert team["users"], "a Blue team with an exam flag must have at least one user"
+            assert isinstance(team["exam_flag_hash"], str) and re.fullmatch(
+                r"[0-9a-f]{64}", team["exam_flag_hash"]
+            ), "exam_flag_hash must be a SHA-256 hex digest"
 
         # Verify team services if blue team
         if team["color"] == "Blue":
@@ -279,9 +287,20 @@ class Competition(dict):
             logger.info("Creating {0} Team: {1}".format(team_dict["color"], team_dict["name"]))
             team_obj = Team(name=team_dict["name"], color=team_dict["color"])
             db.session.add(team_obj)
+            team_users = []
             for user_dict in team_dict["users"]:
                 logger.info("\tCreating User {0}".format(user_dict["username"]))
-                db.session.add(User(username=user_dict["username"], password=user_dict["password"], team=team_obj))
+                user_obj = User(username=user_dict["username"], password=user_dict["password"], team=team_obj)
+                team_users.append(user_obj)
+                db.session.add(user_obj)
+            if "exam_flag_hash" in team_dict:
+                db.session.add(
+                    ExamCredential(
+                        team=team_obj,
+                        user=team_users[0],
+                        token_hash=team_dict["exam_flag_hash"],
+                    )
+                )
             if "services" in team_dict:
                 for service_dict in team_dict["services"]:
                     logger.info("\tCreating {0} Service".format(service_dict["name"]))

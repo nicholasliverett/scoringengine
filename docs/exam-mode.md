@@ -2,17 +2,18 @@
 
 This fork adds private, per-team participation flags. A Blue team pastes the
 contents of the text file installed on its assigned workstation into the Exam
-login page. The flag can be used for repeated logins; the first successful submission records one
-participation event and awards the configured attendance credit. A database
-unique constraint and one transaction protect the award from concurrent or
-repeated submissions.
+login page. The flag can be used for repeated logins; the first successful
+submission records one participation event and awards the configured attendance
+credit. A database unique constraint and one transaction protect the award from
+concurrent or repeated submissions.
 
 Blue users see only Overview and Stats. These pages show their own points and
-anonymous Finding 1, Finding 2, etc. statuses from each check's latest result;
-they do not show service names or round-by-round check history. The public scoreboard, service/check pages, injects, flags,
-team data, and their APIs are unavailable to Blue users. White accounts retain
-the normal password login and instructor pages. Service checks, scoring, and
-the configured check ports continue to operate on the server.
+anonymous Finding 1, Finding 2, etc. statuses from each check's latest result.
+They do not show service names or round-by-round check history. The public
+scoreboard, service/check pages, injects, flags, team data, and their APIs are
+unavailable to Blue users. White accounts retain the normal password login and
+instructor pages. Service checks, scoring, and the configured check ports
+continue to operate on the server.
 
 ## Service scoring for the practical exam
 
@@ -44,102 +45,65 @@ docker compose up -d --build
 Whenever bootstrap runs, it applies pending migrations. For a fresh database,
 it creates all model tables and stamps the current Alembic head.
 
-## Generate Blue teams and logins
+## Generate a practical exam
 
-The source `bin/competition.yaml` is also where the checks for every Blue team
-are defined. Generate a fresh config and a private CSV with one login per team:
-
-```sh
-python bin/generate_blue_teams.py 24 --template-team Team1
-```
-
-This writes `generated-exam/competition.yaml` and
-`generated-exam/blue-team-credentials.csv`. The source YAML is not changed. The
-generator replaces the Blue teams in its output with `Team1` through `Team24`,
-keeps the White and Red teams, and copies the selected template team's services,
-checks, points, and environments to every generated team. Each team gets a
-`team1`, `team2`, etc. username and a four-word, hyphen-separated password. The output directory and
-files receive owner-only POSIX permissions where supported; the directory is
-also ignored by Git because the CSV contains plaintext passwords. The generator
-refuses to overwrite its output unless `--force` is supplied.
-
-For separate machines, put a placeholder in each template service's `host`
-value before generating. For example:
-
-```yaml
-host: ssh-team{team_number}.exam.example.edu
-```
-
-The generator substitutes `{team_number}` (`1`, `2`, ...),
-`{team_number_padded}` (`001`, `002`, ...), or `{team_name}` (`Team1`,
-`Team2`, ...) in service hosts. Any host without a placeholder is copied as-is,
-so all teams will check the same target for that service. Use the template that
-has the check definitions and host pattern you want; `--source path/to/file.yaml`
-can select a different source YAML.
-
-For the five-machine test range `192.168.1.10` through `192.168.1.14`, use the
-included SSH-only template:
+Create the team config, VM addresses, team logins, and Salt flag data in one
+command. The only required inputs are the first VM IPv4 address and the number
+of teams:
 
 ```sh
-python bin/generate_blue_teams.py 5 \
-  --source configs/competition-ssh-template.yaml \
-  --template-team Team1 \
-  --host-number-offset 9
+python bin/generate_blue_teams.py 24 --start-ip 192.168.1.10
 ```
 
-This keeps generated teams named `Team1` to `Team5` and renders the SSH hosts as
-`.10` through `.14`. The SSH check logs in as `scoringcheck` and runs `id`; set
-that same account and password on each test machine, or edit the template's
-service account to match the machines. The attendance-login usernames and
-passwords are generated separately in the credentials CSV. The check matches
-the `SUCCESS` marker emitted after a successful SSH login and command run.
+The default template is `configs/competition-ssh-template.yaml`. It keeps the
+White and Red teams and clones the selected Blue team as `Team1` through
+`Team24`. Each clone gets the next IP (`192.168.1.10`, `.11`, and so on), its
+own generated Scoring Engine login, and a unique exam flag. Every service in a
+team's template points at that team's VM. Change the template when the checks,
+service accounts, or team roles differ for an exam. Use `--source`
+to select another YAML template and `--output-dir` to change the output
+location.
 
-For a new database, review the generated YAML and copy it to
-`bin/competition.yaml` before the initial Compose setup. The setup script reads
-that file only while creating the database. Changing it after the database has
-been initialized does not update existing teams or services. The generator
-does not edit a running application or create attendance flags; use
-`bin/provision_exam_flags.py` after the teams exist, with the team-ID-to-machine
-inventory needed to install each flag.
+The output is private under `generated-exam/`:
 
-## Provision flags
+- `competition.yaml` is the generated Scoring Engine config. It contains only
+  SHA-256 hashes of the exam flags; loading it into a new database registers
+  those flags for the generated Blue users.
+- `blue-team-credentials.csv` contains the generated Blue usernames and
+  passwords.
+- `salt/pillar/top.sls` targets minions by their `ipv4` grain. Each
+  `salt/pillar/practical_exam/teamN.sls` contains only that team's flag.
+- `salt/states/top.sls` and
+  `salt/states/practical_exam/install_exam_flag.sls` install the target team's
+  flag at `/tmp/exam-flag.txt` with read-only mode `0444`, so the assigned team
+  can submit it from its VM.
 
-Create a private inventory CSV:
+The private output directory and secret files receive owner-only POSIX
+permissions where supported. Generated output is ignored by Git, and the
+generator refuses to overwrite existing output unless `--force` is supplied.
+Use `--flag-path` if the VM's Salt-managed token file should be somewhere other
+than `/tmp/exam-flag.txt`.
 
-```csv
-team_id,machine
-12,student-01
-13,student-02
-```
-
-Use a white-team account to create the exports and register only their hashes
-in the application:
+To apply the generated Salt data, add the generated `salt/pillar` directory to
+Salt's `pillar_roots` and `salt/states` directory to `file_roots`, then run:
 
 ```sh
-python bin/provision_exam_flags.py \
-  --base-url https://exam.example.edu \
-  --inventory exam-machines.csv \
-  --output-dir /secure/exam-flags \
-  --username instructor
+salt '*' state.apply
 ```
 
-The script prompts for the account password when omitted by the shell wrapper;
-for automated use provide it through a protected secret source. (Avoid putting
-it in shell history.) The output directory is created if needed. Each
-`team-<id>-<machine>.txt` contains a high-entropy random flag and is written
-with owner-only permissions where the operating system supports them. Copy
-each file to the corresponding student's workstation using your existing
-configuration management. Protect both the export directory and transport;
-the flag is a bearer login credential. HTTPS is required unless `--allow-http`
-is explicitly supplied on an isolated trusted network.
+The generated top files match minions whose `ipv4` grain contains the assigned
+address, so each VM receives only its own flag. The template's SSH check logs in
+as `scoringcheck` and runs `id`; configure that account and password on every
+VM, or edit the service account in the template. Generated exam flags are
+registered when the generated `competition.yaml` is used to initialize the
+database. To use this config with a new database, copy it to
+`bin/competition.yaml` before the initial Compose setup. Config changes do not
+modify teams or services in an already initialized database.
 
-Rerunning without `--rotate` reuses existing files and is idempotent. The
-application never returns plaintext flags and stores only SHA-256 hashes. To
-replace compromised or lost credentials, rerun with `--rotate`; deploy the new
-files to the workstations promptly because the previous flags stop working
-when registration commits. If an interrupted rotation leaves local files and
-database state uncertain, rerun with `--rotate` and distribute the newly
-generated export.
+For a live database, the legacy `bin/provision_exam_flags.py` flow remains
+available for deliberate flag registration or rotation. Its API flow requires
+team IDs and an authenticated White-team account; it is not needed for a new
+exam generated from this template.
 
 ## Operational notes
 
@@ -149,6 +113,5 @@ generated export.
   `012_current_state_service_scoring`.
 - The provisioning API is white-team-only, requires the normal authenticated
   session and CSRF protection, and validates every team before saving.
-- Export files are deliberately not emitted by `docker compose up`: flags are
-  secrets, and provisioning must happen after the machine-to-team inventory is
-  known. The script is suitable for an IaC job after the application is live.
+- Keep the generated `generated-exam/` directory and Salt pillar data private;
+  exam flags are bearer login credentials.

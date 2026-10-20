@@ -1,8 +1,7 @@
-# Five-machine SSH test template.
-# Generate the five teams with:
-# python bin/generate_blue_teams.py 5 --source configs/competition-ssh-template.yaml --template-team Team1 --host-number-offset 9
+# SSH-only practical exam template. Generate consecutive team hosts with:
+# python bin/generate_blue_teams.py 5 --start-ip 192.168.1.10
 # Change the sample White/Red passwords before a real exam. Set the scoringcheck
-# account below to a password configured on all five machines.
+# account below to a password configured on every team VM.
 teams:
   - name: WhiteTeam
     color: White
