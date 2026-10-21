@@ -127,6 +127,12 @@ def overview_get_round_data():
         round_start = ""
         number = 0
     engine_paused = Setting.get_setting("engine_paused").value
+    target_round_time = Setting.get_setting("target_round_time")
+    try:
+        interval = int(target_round_time.value) if target_round_time else 0
+    except (TypeError, ValueError):
+        interval = 0
+
     next_round_at = None
     if engine_paused:
         next_round_status = "paused"
@@ -135,11 +141,6 @@ def overview_get_round_data():
     elif round_obj.round_end is None:
         next_round_status = "running"
     else:
-        target_round_time = Setting.get_setting("target_round_time")
-        try:
-            interval = int(target_round_time.value) if target_round_time else 0
-        except (TypeError, ValueError):
-            interval = 0
         if interval <= 0:
             next_round_status = "unknown"
         else:
@@ -154,6 +155,7 @@ def overview_get_round_data():
         "engine_paused": engine_paused,
         "next_round_at": next_round_at,
         "next_round_status": next_round_status,
+        "target_round_time": interval if interval > 0 else None,
     }
     return jsonify(data)
 

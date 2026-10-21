@@ -5,23 +5,28 @@
     {% if current_user.is_blue_team %}
     <div class="page-title-bar"><h1 class="page-title">Overview</h1></div>
     <div class="stat-cards-row">
-        <div class="stat-card"><div class="stat-label">Total points</div><div class="stat-value" id="exam-total">—</div><div class="stat-detail">Attendance credit is included</div></div>
+        <div class="stat-card"><div class="stat-label">Total points</div><div class="stat-value" id="exam-total">—</div></div>
         <div class="stat-card"><div class="stat-label">Service check points</div><div class="stat-value" id="exam-service">—</div></div>
         <div class="stat-card"><div class="stat-label">Threat check points</div><div class="stat-value" id="exam-threat">—</div></div>
     </div>
-    <div id="exam-next-check" class="alert alert-info" role="status">Loading engine check schedule…</div>
+    <div id="exam-next-check" class="text-muted mb-3" role="status">Loading engine check schedule…</div>
     <h2 class="section-header">Latest Check Status</h2>
-    <p class="text-muted">Service checks verify availability. Threat checks pass when the threat condition is gone. Points show earned out of the maximum for each check; results update after the next completed engine check.</p>
+    <div class="text-muted mb-3">
+        <div><strong>Service checks:</strong> Pass means the service is responding; fail means it may be stopped or unreachable.</div>
+        <div><strong>Threat checks:</strong> Pass means the threat condition is gone; fail means it is still present.</div>
+        <div>Points show earned out of the maximum for each check. Results update after the next completed engine check.</div>
+    </div>
     <div class="chart-card" style="padding:0; overflow:hidden;">
         <table class="table table-sm overview-matrix mb-0">
-            <thead><tr><th>Type</th><th>Check</th><th>Status</th><th>Points</th><th>What this means</th></tr></thead>
-            <tbody id="exam-findings-body"><tr><td colspan="5" class="text-muted">Loading</td></tr></tbody>
+            <thead><tr><th>Type</th><th>Check</th><th>Status</th><th>Points</th></tr></thead>
+            <tbody id="exam-findings-body"><tr><td colspan="4" class="text-muted">Loading</td></tr></tbody>
         </table>
     </div>
     <script>
       var examNextRoundAt = null;
       var examNextRoundStatus = 'waiting';
       var examCurrentRound = 0;
+      var examTargetRoundTime = null;
 
       function renderNextCheck() {
         var message;
@@ -39,14 +44,10 @@
             message = 'The next check time is currently unavailable.';
           } else {
             var seconds = Math.max(0, Math.ceil((next.getTime() - Date.now()) / 1000));
-            var when = next.toLocaleString([], { dateStyle: 'short', timeStyle: 'medium' });
             if (seconds === 0) {
-              message = 'The next check round was expected at ' + when + ' and is due to start.';
+              message = 'The next check round is due to start.';
             } else {
-              var minutes = Math.floor(seconds / 60);
-              var remainingSeconds = seconds % 60;
-              var countdown = minutes > 0 ? minutes + 'm ' + remainingSeconds + 's' : remainingSeconds + 's';
-              message = 'Next check round expected at ' + when + ' (about ' + countdown + ').';
+              message = 'Next round expected in ' + seconds + ' seconds.';
             }
           }
         }
@@ -58,6 +59,11 @@
           examNextRoundAt = data.next_round_at;
           examNextRoundStatus = data.next_round_status;
           examCurrentRound = data.number || 0;
+          examTargetRoundTime = data.target_round_time;
+          var frequencyMessage = examTargetRoundTime
+            ? 'Check rounds are expected every ' + examTargetRoundTime + ' seconds.'
+            : 'Check round interval is currently unavailable.';
+          ScoringEngineUtils.setText(document.getElementById('exam-round-frequency'), frequencyMessage);
           renderNextCheck();
         });
       }
@@ -74,7 +80,7 @@
           var findings = data.findings || [];
           var $body = $('#exam-findings-body').empty();
           if (findings.length === 0) {
-            $body.append($('<tr>').append($('<td>').attr('colspan', 5).addClass('text-muted').text('No checks configured')));
+            $body.append($('<tr>').append($('<td>').attr('colspan', 4).addClass('text-muted').text('No checks configured')));
             return;
           }
           findings.forEach(function(finding) {
@@ -92,8 +98,7 @@
               .append($('<td>').text(finding.category_label))
               .append($('<td>').text(finding.name))
               .append($('<td>').append($status))
-              .append($('<td>').text(formatScore(finding.points_earned, finding.points_max)))
-              .append($('<td>').text(finding.guidance || '')));
+              .append($('<td>').text(formatScore(finding.points_earned, finding.points_max))));
           });
         });
       }
@@ -108,6 +113,8 @@
       });
       ScoringEngineSSE.on('settings_changed', refreshNextCheck);
     </script>
+    <div id="exam-round-frequency" class="text-muted small mb-3"></div>
+    
     {% else %}
     <!-- Page title bar -->
     <div class="page-title-bar">
