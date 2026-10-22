@@ -8,6 +8,7 @@ import hashlib
 import ipaddress
 import os
 import secrets
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -287,6 +288,156 @@ install_exam_flag:
     return salt_root
 
 
+def _write_deployed_file(path, content, mode, owner, group, force=False):
+    """Atomically write a Salt file and assign its service ownership."""
+    path = Path(path)
+    if path.exists():
+        try:
+            if path.read_text(encoding="utf-8") == content:
+                os.chmod(path, mode)
+                shutil.chown(path, user=owner, group=group)
+                return
+        except (OSError, UnicodeError):
+            pass
+        if not force:
+            raise FileExistsError(f"Salt deployment target already exists: {path}; use --force to replace it")
+
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary_name, mode)
+        shutil.chown(temporary_name, user=owner, group=group)
+        os.replace(temporary_name, path)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(temporary_name)
+        except OSError:
+            pass
+        raise
+
+
+def _ensure_salt_directory(path, owner, group, mode=0o750):
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    os.chmod(path, mode)
+    shutil.chown(path, user=owner, group=group)
+
+
+def deploy_salt_outputs(
+    salt_output,
+    state_root="/srv/salt",
+    pillar_root="/srv/pillar",
+    owner="salt",
+    group="salt",
+    force=False,
+):
+    """Install generated state and pillar files into a local Salt master's roots."""
+    if os.name != "posix":
+        raise ValueError("Salt deployment requires a POSIX Salt master; generate files without deployment on Windows")
+
+    salt_output = Path(salt_output)
+    state_root = Path(state_root)
+    pillar_root = Path(pillar_root)
+    generated_state_dir = salt_output / "states" / "practical_exam"
+    generated_pillar_dir = salt_output / "pillar"
+    generated_pillar_team_dir = generated_pillar_dir / "practical_exam"
+    generated_state_files = sorted(generated_state_dir.glob("*.sls"))
+    generated_pillar_files = sorted(generated_pillar_team_dir.glob("*.sls"))
+    generated_pillar_top = generated_pillar_dir / "top.sls"
+
+    if not generated_state_files or not generated_pillar_files or not generated_pillar_top.is_file():
+        raise ValueError(f"generated Salt files are incomplete under {salt_output}")
+
+    # Confirm the requested account/group exist before changing either Salt root.
+    import grp
+    import pwd
+
+    pwd.getpwnam(owner)
+    grp.getgrnam(group)
+
+    generated_top = yaml.safe_load(generated_pillar_top.read_text(encoding="utf-8")) or {}
+    deployed_top_path = pillar_root / "top.sls"
+    if deployed_top_path.exists():
+        deployed_top = yaml.safe_load(deployed_top_path.read_text(encoding="utf-8")) or {}
+    else:
+        deployed_top = {}
+    if not isinstance(generated_top, dict) or not isinstance(deployed_top, dict):
+        raise ValueError("Salt pillar top files must contain YAML mappings")
+
+    for environment, generated_targets in generated_top.items():
+        if not isinstance(generated_targets, dict):
+            raise ValueError(f"generated pillar top environment '{environment}' must contain a mapping")
+        existing_targets = deployed_top.setdefault(environment, {})
+        if not isinstance(existing_targets, dict):
+            raise ValueError(f"deployed pillar top environment '{environment}' must contain a mapping")
+        for target, matches in generated_targets.items():
+            if target in existing_targets and existing_targets[target] != matches and not force:
+                raise FileExistsError(
+                    f"Salt pillar target '{target}' already has a different mapping in {deployed_top_path}; "
+                    "use --force to replace it"
+                )
+            existing_targets[target] = matches
+
+    # Validate all destinations before changing the Salt roots, so a collision
+    # cannot leave only part of an exam installed.
+    state_target_dir = state_root / "practical_exam"
+    pillar_target_dir = pillar_root / "practical_exam"
+    destinations = [(source, state_target_dir / source.name) for source in generated_state_files]
+    destinations.extend((source, pillar_target_dir / source.name) for source in generated_pillar_files)
+    for source, destination in destinations:
+        if destination.exists() and not force:
+            try:
+                same_content = destination.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                same_content = False
+            if not same_content:
+                raise FileExistsError(
+                    f"Salt deployment target already exists: {destination}; use --force to replace it"
+                )
+
+    _ensure_salt_directory(state_root, owner, group)
+    _ensure_salt_directory(pillar_root, owner, group)
+    _ensure_salt_directory(state_target_dir, owner, group)
+    _ensure_salt_directory(pillar_target_dir, owner, group)
+
+    for source in generated_state_files:
+        _write_deployed_file(
+            state_target_dir / source.name,
+            source.read_text(encoding="utf-8"),
+            0o640,
+            owner,
+            group,
+            force=force,
+        )
+
+    for source in generated_pillar_files:
+        _write_deployed_file(
+            pillar_target_dir / source.name,
+            source.read_text(encoding="utf-8"),
+            0o640,
+            owner,
+            group,
+            force=force,
+        )
+
+    _write_deployed_file(
+        deployed_top_path,
+        yaml.safe_dump(deployed_top, sort_keys=False, allow_unicode=True, width=120),
+        0o640,
+        owner,
+        group,
+        force=True,
+    )
+    return state_target_dir, pillar_target_dir, deployed_top_path
+
+
 def write_outputs(data, credentials, output_dir, force=False, flag_path=DEFAULT_FLAG_PATH):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -323,9 +474,9 @@ def write_outputs(data, credentials, output_dir, force=False, flag_path=DEFAULT_
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("count", type=int, help=f"number of Blue teams to generate (1-{MAX_TEAMS})")
+    parser.add_argument("count", nargs="?", type=int, help=f"number of Blue teams to generate (1-{MAX_TEAMS})")
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE, help="source competition YAML")
-    parser.add_argument("--start-ip", required=True, help="starting IPv4 address; each team receives the next address")
+    parser.add_argument("--start-ip", help="starting IPv4 address; each team receives the next address")
     parser.add_argument("--template-team", help="Blue team whose services are copied (default: first Blue team)")
     parser.add_argument(
         "--output-dir", type=Path, default=DEFAULT_OUTPUT, help=f"private output directory (default: {DEFAULT_OUTPUT})"
@@ -336,10 +487,49 @@ def main(argv=None):
         default=DEFAULT_FLAG_PATH,
         help=f"path for the generated exam token on each VM (default: {DEFAULT_FLAG_PATH})",
     )
+    parser.add_argument(
+        "--deploy-salt",
+        action="store_true",
+        help="install generated states and pillar on this Salt master with salt:salt ownership",
+    )
+    parser.add_argument(
+        "--deploy-existing-salt",
+        action="store_true",
+        help="deploy Salt files from an existing output directory without regenerating teams or flags",
+    )
+    parser.add_argument("--salt-state-root", type=Path, default=Path("/srv/salt"), help="Salt state root")
+    parser.add_argument("--salt-pillar-root", type=Path, default=Path("/srv/pillar"), help="Salt pillar root")
+    parser.add_argument("--salt-user", default="salt", help="owner for deployed Salt files (default: salt)")
+    parser.add_argument("--salt-group", default="salt", help="group for deployed Salt files (default: salt)")
     args = parser.parse_args(argv)
 
-    source_path = args.source if args.source.is_absolute() else Path.cwd() / args.source
     output_dir = args.output_dir if args.output_dir.is_absolute() else ROOT / args.output_dir
+
+    if args.deploy_existing_salt:
+        if args.deploy_salt or args.count is not None or args.start_ip is not None:
+            parser.error("--deploy-existing-salt cannot be combined with generation arguments")
+        try:
+            deployed_paths = deploy_salt_outputs(
+                output_dir / "salt",
+                state_root=args.salt_state_root,
+                pillar_root=args.salt_pillar_root,
+                owner=args.salt_user,
+                group=args.salt_group,
+                force=args.force,
+            )
+        except (OSError, yaml.YAMLError, ValueError, LookupError) as error:
+            parser.error(str(error))
+        state_target_dir, pillar_target_dir, pillar_top_path = deployed_paths
+        print(f"Installed existing Salt states in {state_target_dir} and team pillars in {pillar_target_dir}")
+        print(f"Merged generated targets into {pillar_top_path} (owner/group {args.salt_user}:{args.salt_group})")
+        return 0
+
+    if args.count is None:
+        parser.error("count is required unless --deploy-existing-salt is used")
+    if args.start_ip is None:
+        parser.error("--start-ip is required unless --deploy-existing-salt is used")
+
+    source_path = args.source if args.source.is_absolute() else Path.cwd() / args.source
     try:
         with source_path.open(encoding="utf-8") as source_file:
             source_data = yaml.safe_load(source_file)
@@ -348,12 +538,26 @@ def main(argv=None):
         )
         yaml_path, credentials_path = write_outputs(data, credentials, output_dir, args.force, flag_path=args.flag_path)
         salt_path = output_dir / "salt"
-    except (OSError, yaml.YAMLError, ValueError) as error:
+        deployed_paths = None
+        if args.deploy_salt:
+            deployed_paths = deploy_salt_outputs(
+                salt_path,
+                state_root=args.salt_state_root,
+                pillar_root=args.salt_pillar_root,
+                owner=args.salt_user,
+                group=args.salt_group,
+                force=args.force,
+            )
+    except (OSError, yaml.YAMLError, ValueError, LookupError) as error:
         parser.error(str(error))
 
     print(f"Generated {args.count} Blue teams in {yaml_path}")
     print(f"Generated private logins in {credentials_path}")
     print(f"Generated team-targeted Salt pillar and state files in {salt_path}")
+    if deployed_paths:
+        state_target_dir, pillar_target_dir, pillar_top_path = deployed_paths
+        print(f"Installed Salt states in {state_target_dir} and team pillars in {pillar_target_dir}")
+        print(f"Merged generated targets into {pillar_top_path} (owner/group {args.salt_user}:{args.salt_group})")
     print(
         f"Assigned {args.count} consecutive VM addresses from {args.start_ip} "
         f"through {credentials[-1]['machine_ip']}."

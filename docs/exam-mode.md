@@ -65,8 +65,31 @@ command. The only required inputs are the first VM IPv4 address and the number
 of teams:
 
 ```sh
-python bin/generate_blue_teams.py 24 --start-ip 192.168.1.10
+sudo python3 bin/generate_blue_teams.py 24 --start-ip 192.168.1.10 --deploy-salt
 ```
+
+Run this on the Salt master. `--deploy-salt` installs the state under
+`/srv/salt/practical_exam/`, the generated team pillars under
+`/srv/pillar/practical_exam/`, and merges the generated target entries into
+`/srv/pillar/top.sls`. It sets the managed directories to `salt:salt` mode
+`0750` and the managed files to `salt:salt` mode `0640`, including the two
+configured Salt roots. The `salt` user and group must exist, and the command
+needs permission to write to both Salt roots.
+The roots can be changed with `--salt-state-root` and `--salt-pillar-root`.
+Without `--deploy-salt`, the command only writes the private files under
+`generated-exam/` as before.
+
+To deploy files already generated in `generated-exam/` without rotating team
+passwords or flags, run:
+
+```sh
+sudo python3 bin/generate_blue_teams.py --deploy-existing-salt
+```
+
+Use `--output-dir` if the existing output is stored elsewhere. Add `--force`
+only when you intend to replace files already installed in the Salt roots.
+When generating new teams, `--force` also replaces the generated credentials
+and flags.
 
 The default template is `configs/competition-ssh-template.yaml`. It keeps the
 White and Red teams and clones the selected Blue team as `Team1` through
@@ -96,16 +119,18 @@ generator refuses to overwrite existing output unless `--force` is supplied.
 Use `--flag-path` if the VM's Salt-managed token file should be somewhere other
 than `/tmp/exam-flag.txt`.
 
-Put `salt/states/practical_exam/install_exam_flag.sls` under the master's
-configured state root (for example,
-`/srv/salt/practical_exam/install_exam_flag.sls`). Put the generated
-`salt/pillar/practical_exam/` directory under a configured pillar root and add
-the entries from the generated `salt/pillar/top.sls` to the pillar top file.
-The pillar top assigns each team's private flag to its VM. The state itself is
-applied directly by name, so no state top file is needed:
+If you did not use `--deploy-salt`, put
+`salt/states/practical_exam/install_exam_flag.sls` under the master's
+configured state root, put `salt/pillar/practical_exam/` under a configured
+pillar root, and merge the entries from `salt/pillar/top.sls` into that root's
+pillar top file. The pillar top assigns each team's private flag to its VM.
+The state itself is applied directly by name, so no state top file is needed.
+After deploying the files, refresh pillar data and apply the state:
 
 ```sh
-salt -C 'G@ipv4:192.168.1.10' state.apply practical_exam.install_exam_flag
+sudo salt-run fileserver.update
+sudo salt '*' saltutil.refresh_pillar
+sudo salt -C 'G@ipv4:192.168.1.10' state.apply practical_exam.install_exam_flag
 ```
 
 Replace the sample IP with the VM's address. To apply to all exam VMs in one
