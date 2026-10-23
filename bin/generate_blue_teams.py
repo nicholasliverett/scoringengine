@@ -21,7 +21,7 @@ DEFAULT_SOURCE = ROOT / "configs" / "competition-ssh-template.yaml"
 DEFAULT_OUTPUT = ROOT / "generated-exam"
 MAX_TEAMS = 1000
 PASSWORD_WORD_COUNT = 4
-DEFAULT_FLAG_PATH = "/home/user/exam-flag.txt"
+DEFAULT_FLAG_PATH = "/home/user/Desktop/exam-flag.txt"
 
 # Short, plain ASCII words keep passphrases easy to read and below bcrypt's
 # 72-byte input limit even when all four words are at their maximum length.
