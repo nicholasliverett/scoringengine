@@ -348,7 +348,8 @@ def deploy_salt_outputs(
     generated_state_dir = salt_output / "states" / "practical_exam"
     generated_pillar_dir = salt_output / "pillar"
     generated_pillar_team_dir = generated_pillar_dir / "practical_exam"
-    generated_state_files = sorted(generated_state_dir.glob("*.sls"))
+    flag_state = generated_state_dir / "install_exam_flag.sls"
+    generated_state_files = [flag_state] if flag_state.is_file() else []
     generated_pillar_files = sorted(generated_pillar_team_dir.glob("*.sls"))
     generated_pillar_top = generated_pillar_dir / "top.sls"
 
@@ -495,7 +496,7 @@ def main(argv=None):
     parser.add_argument(
         "--deploy-existing-salt",
         action="store_true",
-        help="deploy Salt files from an existing output directory without regenerating teams or flags",
+        help="deploy generated flag state and pillars without regenerating teams or flags",
     )
     parser.add_argument("--salt-state-root", type=Path, default=Path("/srv/salt"), help="Salt state root")
     parser.add_argument("--salt-pillar-root", type=Path, default=Path("/srv/pillar"), help="Salt pillar root")

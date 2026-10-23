@@ -135,9 +135,23 @@ sudo salt -C 'G@ipv4:192.168.1.10' state.apply practical_exam.install_exam_flag
 
 Replace the sample IP with the VM's address. To apply to all exam VMs in one
 command, target their minion IDs or use a compound expression matching the
-assigned IPs. The template's SSH check logs in as `scoringcheck` and runs `id`;
-configure that account and password on every VM, or edit the service account in
-the template. Generated exam flags are registered when the generated
+assigned IPs. The generator deploys only the flag state and team pillars. To
+deploy the separate threat state from the repository on the Salt master:
+
+```sh
+sudo install -d -o salt -g salt -m 0750 /srv/salt/practical_exam
+sudo install -o salt -g salt -m 0640 salt/practical_exam/deploy_threats.sls /srv/salt/practical_exam/deploy_threats.sls
+sudo salt-run fileserver.update
+sudo salt -C 'G@ipv4:192.168.1.10' state.apply practical_exam.deploy_threats
+```
+
+It creates the visible `threatuser` account and starts the Ncat Bash listener
+on port 4444. The listener runs as `threatuser` and provides Bash to clients
+that can reach the port, so use it only on the isolated competition network.
+The threat template's SSH check logs
+in as `scoringcheck` and checks whether `threatuser` exists; configure that
+account and password on every VM, or edit the service account in the template.
+Generated exam flags are registered when the generated
 `competition.yaml` is used to initialize the database. To use this config with
 a new database, copy it to `bin/competition.yaml` before the initial Compose
 setup. Config changes do not modify teams or services in an already initialized
