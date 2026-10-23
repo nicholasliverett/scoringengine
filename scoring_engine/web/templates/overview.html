@@ -203,6 +203,10 @@
             return '<td>' + parseFloat(value).toLocaleString() + '</td>';
         }
 
+        if (rowLabel === 'Attendance Credit') {
+            return '<td>' + (parseInt(value, 10) || 0).toLocaleString() + '</td>';
+        }
+
         if (rowLabel === 'Current Place') {
             var medal = '';
             if (value == 1) medal = ' <i class="bi bi-award-fill" style="color:#C98910"></i>';
@@ -264,7 +268,7 @@
             var rows = json.data || [];
             _serviceIds = json.service_ids || null;
             var html = '';
-            var metaRows = ['Current Score', 'Current Place', 'SLA Penalties', 'Services Up', 'Services Down'];
+            var metaRows = ['Current Score', 'Current Place', 'Attendance Credit', 'SLA Penalties', 'Services Up', 'Services Down'];
             var serviceRowIndex = 0;
 
             for (var r = 0; r < rows.length; r++) {

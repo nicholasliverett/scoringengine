@@ -102,6 +102,11 @@ def _record_exam_participation_once(team_id):
             db.session.flush()
             db.session.add(ExamParticipation(team_id=team_id, score_adjustment_id=adjustment.id))
             db.session.commit()
+            from scoring_engine.cache_helper import update_overview_data, update_scoreboard_data, update_stats
+
+            update_overview_data()
+            update_scoreboard_data()
+            update_stats()
             return
         except IntegrityError:
             # The other concurrent request may have inserted the unique team

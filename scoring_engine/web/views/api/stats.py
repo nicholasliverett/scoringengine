@@ -14,8 +14,10 @@ from scoring_engine.datetime_utils import ensure_utc_aware
 from scoring_engine.db import db
 from scoring_engine.models.account import Account
 from scoring_engine.models.check import Check
+from scoring_engine.models.exam_credential import ExamParticipation
 from scoring_engine.models.inject import Inject, Template
 from scoring_engine.models.round import Round
+from scoring_engine.models.score_adjustment import ScoreAdjustment
 from scoring_engine.models.service import Service
 from scoring_engine.models.setting import Setting
 from scoring_engine.models.team import Team
@@ -162,7 +164,18 @@ def api_stats_scoring_overview():
     )
     adjusted_scores = {tid: int(adjusted_scores.get(tid, 0)) for tid in blue_team_ids}
 
+    attendance_points = dict(
+        db.session.query(ExamParticipation.team_id, ScoreAdjustment.points)
+        .join(ScoreAdjustment, ExamParticipation.score_adjustment_id == ScoreAdjustment.id)
+        .filter(ExamParticipation.team_id.in_(blue_team_ids))
+        .all()
+    )
+    score_with_attendance = {
+        team_id: adjusted_scores[team_id] + int(attendance_points.get(team_id, 0))
+        for team_id in blue_team_ids
+    }
     service_ranks = calculate_ranks(adjusted_scores)
+    combined_ranks = calculate_ranks(score_with_attendance)
 
     service_table = []
     for t in blue_teams:
@@ -170,6 +183,9 @@ def api_stats_scoring_overview():
             "team": t.name,
             "score": adjusted_scores.get(t.id, 0),
             "rank": service_ranks.get(t.id, 0),
+            "attendance_points": int(attendance_points.get(t.id, 0)),
+            "score_with_attendance": score_with_attendance.get(t.id, 0),
+            "rank_with_attendance": combined_ranks.get(t.id, 0),
         })
 
     # --- Inject Scores by Category ---

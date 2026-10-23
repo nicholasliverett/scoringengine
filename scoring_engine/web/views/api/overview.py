@@ -9,7 +9,9 @@ from scoring_engine.cache import cache
 from scoring_engine.datetime_utils import ensure_utc_aware
 from scoring_engine.db import db
 from scoring_engine.models.check import Check
+from scoring_engine.models.exam_credential import ExamParticipation
 from scoring_engine.models.round import Round
+from scoring_engine.models.score_adjustment import ScoreAdjustment
 from scoring_engine.models.service import Service
 from scoring_engine.models.setting import Setting
 from scoring_engine.models.team import Team
@@ -183,7 +185,7 @@ def overview_get_data():
     values line up with the blue team columns from ``/api/overview/get_columns``.
     Values are pure data (no markup) - the front end owns the presentation:
 
-    - ``Current Score`` / ``Current Place``: stringified integers
+    - ``Current Score`` / ``Current Place`` / ``Attendance Credit``: stringified integers
     - ``SLA Penalties``: penalty magnitude as an integer (0 when no penalty)
     - ``Services Up`` / ``Services Down``: this round's up/down counts as integers
     - service rows: check result booleans (or ``None`` when unchecked)
@@ -201,6 +203,7 @@ def overview_get_data():
     services_up = ["Services Up"]
     services_down = ["Services Down"]
     sla_penalties_row = ["SLA Penalties"]
+    attendance_credit_row = ["Attendance Credit"]
 
     num_up_services = dict(
         db.session.query(Service.team_id, func.count(Service.team_id))
@@ -222,20 +225,29 @@ def overview_get_data():
 
         _, freeze_time = get_effective_freeze()
         team_scores = team_service_scores(db.session, sla_config, freeze_time=freeze_time)
-        adjusted_scores_dict = {}
+        attendance_points = dict(
+            db.session.query(ExamParticipation.team_id, ScoreAdjustment.points)
+            .join(ScoreAdjustment, ExamParticipation.score_adjustment_id == ScoreAdjustment.id)
+            .filter(ExamParticipation.team_id.in_(blue_team_ids))
+            .all()
+        )
+        total_scores = {
+            team_id: int(team_scores.get(team_id, 0)) + int(attendance_points.get(team_id, 0))
+            for team_id in blue_team_ids
+        }
         penalties_dict = {}
         for blue_team_id in blue_team_ids:
             penalties_dict[blue_team_id] = 0
-            adjusted_scores_dict[blue_team_id] = team_scores.get(blue_team_id, 0)
 
-        scores_for_ranking = team_scores
+        scores_for_ranking = total_scores
 
         # Calculate ranks with tie handling
         ranks_dict = calculate_ranks(scores_for_ranking)
 
         for blue_team_id in blue_team_ids:
-            current_scores.append(str(team_scores.get(blue_team_id, 0)))
+            current_scores.append(str(total_scores[blue_team_id]))
             current_places.append(str(ranks_dict.get(blue_team_id, 0)))
+            attendance_credit_row.append(str(attendance_points.get(blue_team_id, 0)))
             # Up and down counts as separate rows so each cell holds a single
             # value -- a combined "up / down" wraps in a narrow team column and
             # makes the row height jump around.
@@ -246,6 +258,7 @@ def overview_get_data():
             sla_penalties_row.append(penalties_dict.get(blue_team_id, 0))
 
         data.append(current_scores)
+        data.append(attendance_credit_row)
         data.append(current_places)
         data.append(services_up)
         data.append(services_down)

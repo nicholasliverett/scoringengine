@@ -59,12 +59,12 @@
     {% if current_user.is_white_team %}
     <!-- Scoring Overview (White Team Only) -->
     <div class="d-flex justify-content-between align-items-center">
-        <h3 class="section-header mb-0">Service Scoring Overview</h3>
+        <h3 class="section-header mb-0">Service and Attendance Scoring Overview</h3>
         <button class="btn btn-sm btn-primary" onclick="copyTable('service-scoring')" title="Copy to clipboard"><i class="bi bi-clipboard"></i></button>
     </div>
     <div class="chart-card" style="padding:1rem 1.25rem; overflow:hidden;">
         <table id="service-scoring" class="table table-striped table-bordered table-sm" cellspacing="0" width="100%">
-            <thead><tr><th>Team</th><th>Raw Service Score</th><th>Rank</th></tr></thead>
+            <thead><tr><th>Team</th><th>Service Points</th><th>Attendance Credit</th><th>Service + Attendance</th><th>Combined Rank</th></tr></thead>
             <tbody></tbody>
         </table>
     </div>
@@ -179,13 +179,19 @@
         // Service scoring table
         var svcRows = [];
         $.each(data.service_table, function(i, row) {
-            svcRows.push([row.team, row.score.toLocaleString(), row.rank]);
+            svcRows.push([
+                row.team,
+                Number(row.score || 0).toLocaleString(),
+                Number(row.attendance_points || 0).toLocaleString(),
+                Number(row.score_with_attendance || 0).toLocaleString(),
+                row.rank_with_attendance
+            ]);
         });
         // DataTables writes cells with innerHTML and team names are stored verbatim,
         // so the team column needs an escaping renderer (sorting/search/copy still
         // see the raw value).
         $('#service-scoring').DataTable({
-            data: svcRows, paging: false, searching: false, order: [[2, 'asc']],
+            data: svcRows, paging: false, searching: false, order: [[4, 'asc']],
             columnDefs: [{ targets: 0, render: ScoringEngineUtils.dtEscape() }]
         });
 
