@@ -2,6 +2,7 @@ from scoring_engine.engine.basic_check import CHECKS_BIN_PATH, BasicCheck
 
 
 class WebappScoringengineCheck(BasicCheck):
+    REQUIRES_PACK = "browser"
     required_properties = ["scheme", "basepath"]
     CMD = (
         "pytest --tb=line -s -q -rA --scheme={0} --hostip={1} --hostport={2} --basepath={3} --username={4} --password={5} "
@@ -11,4 +12,4 @@ class WebappScoringengineCheck(BasicCheck):
 
     def command_format(self, properties):
         account = self.get_random_account()
-        return (properties["scheme"], self.host, self.port, properties["basepath"], account.username, account.password)
+        return (properties["scheme"], self.host, self.port, properties["basepath"], account.username, self.secret(account.password))

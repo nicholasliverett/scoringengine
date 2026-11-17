@@ -2,6 +2,7 @@ from scoring_engine.engine.basic_check import CHECKS_BIN_PATH, BasicCheck
 
 
 class RDPCheck(BasicCheck):
+    REQUIRES_PACK = "rdp"
     required_properties = []
     CMD = CHECKS_BIN_PATH + "/rdp_check {0} {1} {2} {3}"
 
@@ -9,7 +10,7 @@ class RDPCheck(BasicCheck):
         account = self.get_random_account()
         return (
             account.username,
-            account.password,
+            self.secret(account.password),
             self.host,
             self.port,
         )

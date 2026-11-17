@@ -1,6 +1,8 @@
 Implemented Checks
 *********************
 
+.. include:: checks/adcs.rst
+.. include:: checks/agent.rst
 .. include:: checks/dns.rst
 .. include:: checks/elasticsearch.rst
 .. include:: checks/ftp.rst
@@ -17,8 +19,11 @@ Implemented Checks
 .. include:: checks/smb.rst
 .. include:: checks/smtp.rst
 .. include:: checks/ssh.rst
+.. include:: checks/tcp.rst
 .. include:: checks/command.rst
 .. include:: checks/telnet.rst
 .. include:: checks/vnc.rst
+.. include:: checks/webapp.rst
 .. include:: checks/winrm.rst
+.. include:: checks/wordpress.rst
 .. include:: checks/openvpn.rst

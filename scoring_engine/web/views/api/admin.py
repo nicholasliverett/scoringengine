@@ -16,6 +16,7 @@ from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.sql import func
 from werkzeug.utils import secure_filename
 
+from scoring_engine.worker_packs import service_queue
 from scoring_engine.cache_helper import (
     update_all_cache,
     update_all_inject_data,
@@ -1587,10 +1588,10 @@ def admin_check_dry_run():
     # Dispatch to a Celery worker via the service's worker queue
     import time
 
-    job = {"command": command}
+    job = {"command": command, "env": check_obj.command_env}
     start_time = time.time()
     try:
-        result = execute_command.apply_async(args=[job], queue=service.worker_queue)
+        result = execute_command.apply_async(args=[job], queue=service_queue(service, check_class))
         completed_job = result.get(timeout=35)
     except Exception as e:
         return jsonify({"status": "error", "message": f"Worker execution failed: {str(e)}"}), 500

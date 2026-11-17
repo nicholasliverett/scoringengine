@@ -117,11 +117,16 @@ services:
       - SCORINGENGINE_EXAMPLE
       - SCORINGENGINE_VERSION
       - SCORINGENGINE_SECRET_KEY
-  worker:
-    image: scoringengine/worker
+  # Worker tool packs (see scoring_engine/worker_packs.py). The default worker
+  # is the slim "core" image. Enable the packs your competition needs with
+  # COMPOSE_PROFILES=db,rdp,browser (each starts a worker for that pack), or
+  # set WORKER_TARGET=full for a single worker with every pack.
+  worker: &worker
+    image: scoringengine/worker-${WORKER_TARGET:-core}
     build:
       context: .
       dockerfile: ./docker/worker/Dockerfile
+      target: ${WORKER_TARGET:-core}
       args:
         BASE_IMAGE: scoringengine/base
       cache_from:
@@ -144,6 +149,46 @@ services:
       - SCORINGENGINE_VERSION
       - DISPLAY=:1
     privileged: true
+  worker-db:
+    <<: *worker
+    image: scoringengine/worker-db
+    build:
+      context: .
+      dockerfile: ./docker/worker/Dockerfile
+      target: db
+      args:
+        BASE_IMAGE: scoringengine/base
+    profiles: [db]
+  worker-rdp:
+    <<: *worker
+    image: scoringengine/worker-rdp
+    build:
+      context: .
+      dockerfile: ./docker/worker/Dockerfile
+      target: rdp
+      args:
+        BASE_IMAGE: scoringengine/base
+    profiles: [rdp]
+  worker-browser:
+    <<: *worker
+    image: scoringengine/worker-browser
+    build:
+      context: .
+      dockerfile: ./docker/worker/Dockerfile
+      target: browser
+      args:
+        BASE_IMAGE: scoringengine/base
+    profiles: [browser]
+  worker-adcs:
+    <<: *worker
+    image: scoringengine/worker-adcs
+    build:
+      context: .
+      dockerfile: ./docker/worker/Dockerfile
+      target: adcs
+      args:
+        BASE_IMAGE: scoringengine/base
+    profiles: [adcs]
   web:
     image: scoringengine/web
     build:
@@ -214,3 +259,11 @@ volumes:
 
 networks:
   default:
+    driver_opts:
+      # Containers default to MTU 1500 regardless of the host's uplink. When
+      # scored hosts sit behind a lower-MTU path (OpenStack/VXLAN, GRE, IPsec)
+      # and their firewalls drop ICMP "fragmentation needed", large replies
+      # are silently lost: TCP connects, then TLS/HTTP checks hang until
+      # timeout while small-packet services (SSH) keep passing. Set
+      # DOCKER_NETWORK_MTU in .env (e.g. 1400) to match the path MTU.
+      com.docker.network.driver.mtu: ${DOCKER_NETWORK_MTU:-1500}
