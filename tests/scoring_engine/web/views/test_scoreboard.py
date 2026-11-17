@@ -7,6 +7,8 @@ import scoring_engine.web.views.scoreboard as view_module
 from tests.scoring_engine.helpers import populate_sample_data
 
 from scoring_engine.db import db
+from scoring_engine.models.team import Team
+from scoring_engine.models.user import User
 
 
 class TestScoreboard:
@@ -21,6 +23,15 @@ class TestScoreboard:
 
     def test_scoreboard(self):
         populate_sample_data(db.session)
+        team = Team(name="Instructor", color="White")
+        db.session.add(team)
+        db.session.flush()
+        db.session.add(User(username="instructor", password="testpass", team=team))
+        db.session.commit()
+        self.client.post("/login", data={"username": "instructor", "password": "testpass"})
         resp = self.client.get("/scoreboard")
         assert resp.status_code == 200
         assert self.mock_obj.call_args == call("scoreboard.html")
+
+    def test_scoreboard_requires_login(self):
+        assert self.client.get("/scoreboard").status_code == 302

@@ -1,28 +1,27 @@
-"""Score materialization and reads.
+"""Current-state score materialization and reads.
 
-Wave 2 replaces recompute-from-full-history scoring with a per-round fact table
-(``round_score``). This module owns both sides of it:
+This module stores sparse per-round service-state snapshots:
 
 - Write: :func:`materialize_round` (called by the engine at round close) and
   :func:`materialize_all_rounds` (backfill / non-engine contexts).
-- Read: :func:`team_service_scores` (all teams, dynamic-aware, for the
-  scoreboard/overview), :func:`all_team_service_scores` (all teams, raw, backing
+- Read: :func:`team_service_scores` (all teams, for the scoreboard/overview),
+  :func:`all_team_service_scores` (all teams, backing
   ``Team.place``), :func:`team_service_score` (one team's raw total, backing
-  ``Team.current_score``), and :func:`team_dynamic_service_score` (one team,
-  dynamic multiplier applied, backing the SLA base). ``Team.get_array_of_scores`` /
-  ``get_round_scores`` and the scoreboard line chart also read round_score directly.
+  ``Team.current_score``), and :func:`team_dynamic_service_score` (compatibility
+  alias to current-state scoring). ``Team.get_array_of_scores`` /
+  ``get_round_scores`` and the scoreboard line chart read these snapshots.
   These replace the full-history ``JOIN checks`` scans.
 
-Per-service reads (``Service.score_earned``/``rank``) and SLA consecutive-failure
-detection still read ``checks`` directly -- round_score is team-grained.
+Service up/down state is cached on ``Service.scoring_up`` and repaired from the
+latest completed check if rounds are rolled back.
 """
 
 from sqlalchemy import and_, case, or_
 from sqlalchemy.sql import func
 
 from scoring_engine.models.check import Check
-from scoring_engine.models.round_score import RoundScore
 from scoring_engine.models.service import Service
+from scoring_engine.models.service_score_snapshot import ServiceScoreSnapshot
 
 
 def get_freeze_time():
@@ -64,79 +63,91 @@ def get_freeze_time():
 
 
 def _round_freeze_filter(query, freeze_time):
-    """Restrict a round_score query to rounds that closed at/before the freeze."""
+    """Restrict score snapshots to rounds closed at/before the freeze."""
     if freeze_time is None:
         return query
     from scoring_engine.models.round import Round
 
-    return query.join(Round, Round.id == RoundScore.round_id).filter(Round.round_end <= freeze_time)
+    return query.join(Round, Round.id == ServiceScoreSnapshot.round_id).filter(Round.round_end <= freeze_time)
 
 
 def compute_round_service_points(session, round_id):
-    """Return ``{team_id: service_points}`` for a single round.
+    """Return current per-team service points as of this round.
 
-    ``service_points`` is the sum of ``Service.points`` over the team's *passing*
-    checks in this round. Only teams with a non-zero total appear.
+    Each service contributes its configured points while its latest completed
+    check passed, and zero when it failed. Repeated passes never accumulate.
     """
+    from scoring_engine.models.round import Round
+
+    round_number = session.query(Round.number).filter(Round.id == round_id).scalar()
+    if round_number is None:
+        return {}
+    latest = (
+        session.query(Check.service_id, func.max(Check.id).label("check_id"))
+        .join(Round, Check.round_id == Round.id)
+        .filter(Round.number <= round_number, Check.completed.is_(True))
+        .group_by(Check.service_id)
+        .subquery()
+    )
     rows = (
-        session.query(Service.team_id, func.sum(Service.points))
-        .join(Check, Check.service_id == Service.id)
-        .filter(Check.round_id == round_id)
-        .filter(Check.result.is_(True))
-        .group_by(Service.team_id)
+        session.query(Service.team_id, Service.points, Check.result)
+        .outerjoin(latest, latest.c.service_id == Service.id)
+        .outerjoin(Check, Check.id == latest.c.check_id)
         .all()
     )
-    return {team_id: int(points or 0) for team_id, points in rows if points}
+    scores = {}
+    for team_id, points, result in rows:
+        if team_id is None:
+            continue
+        scores.setdefault(team_id, 0)
+        if result:
+            scores[team_id] += int(points or 0)
+    return scores
 
 
 def materialize_round(session, round_id, round_number, points_by_team=None, clear_existing=True, commit=True):
-    """Write ``round_score`` rows for a freshly closed round.
-
-    Writes one row per team that scored something this round; a team with zero
-    simply has no row, and reads coalesce a missing ``(team, round)`` to zero.
-    ``flag_points`` is written as 0 here -- red-team scoring (phase 4) will
-    populate it. The column exists so the schema is stable across phases.
-
-    Takes ``round_id`` / ``round_number`` as plain integers rather than a Round
-    object on purpose: the engine's Round was expired by its earlier commit, and
-    reading an expired ORM attribute here would trigger a refresh query that
-    autoflushes the round's still-pending checks ahead of the single round-close
-    commit -- breaking both atomicity and the engine's failure handling. Ints
-    can't do that.
-
-    Parameters
-    ----------
-    points_by_team : dict, optional
-        Precomputed ``{team_id: service_points}``. The engine passes the sums it
-        already accumulated while processing checks, so the common path runs no
-        query at all. When omitted (tests, backfill-equivalence), the sums are
-        queried from the checks for ``round_id``.
-    clear_existing : bool
-        Delete any prior rows for this round first, for idempotency under retry.
-        The engine passes ``False`` because a freshly created round has none, and
-        skipping the delete avoids an autoflush of the pending checks.
-
-    Returns the number of rows written.
-    """
+    """Write sparse service-state snapshots for teams whose score changed."""
     if clear_existing:
-        session.query(RoundScore).filter(RoundScore.round_id == round_id).delete(synchronize_session=False)
+        session.query(ServiceScoreSnapshot).filter(
+            ServiceScoreSnapshot.round_id == round_id
+        ).delete(synchronize_session=False)
 
     if points_by_team is None:
         points_by_team = compute_round_service_points(session, round_id)
 
-    written = 0
-    for team_id, service_points in points_by_team.items():
-        if not service_points:
-            continue
-        session.add(
-            RoundScore(
-                round_id=round_id,
-                round_number=round_number,
-                team_id=team_id,
-                service_points=service_points,
-                flag_points=0,
+    with session.no_autoflush:
+        previous_round = (
+            session.query(
+                ServiceScoreSnapshot.team_id,
+                func.max(ServiceScoreSnapshot.round_number).label("round_number"),
             )
+            .filter(ServiceScoreSnapshot.round_number < round_number)
+            .group_by(ServiceScoreSnapshot.team_id)
+            .subquery()
         )
+        previous = dict(
+            session.query(ServiceScoreSnapshot.team_id, ServiceScoreSnapshot.service_points)
+            .join(
+                previous_round,
+                and_(
+                    previous_round.c.team_id == ServiceScoreSnapshot.team_id,
+                    previous_round.c.round_number == ServiceScoreSnapshot.round_number,
+                ),
+            )
+            .all()
+        )
+
+    written = 0
+    for team_id, points in points_by_team.items():
+        points = int(points or 0)
+        if previous.get(team_id, 0) == points:
+            continue
+        session.add(ServiceScoreSnapshot(
+            round_id=round_id,
+            round_number=round_number,
+            team_id=team_id,
+            service_points=points,
+        ))
         written += 1
     if commit:
         session.commit()
@@ -144,76 +155,87 @@ def materialize_round(session, round_id, round_number, points_by_team=None, clea
 
 
 def materialize_all_rounds(session, commit=True):
-    """(Re)materialize round_score for every round from the current checks.
-
-    Idempotent per round (clear-and-rewrite). The engine keeps round_score current
-    at round close in production; this is for backfill parity and for any context
-    that creates checks without the engine (tests, manual imports, a one-off
-    recompute after correcting historical data).
-    """
+    """Rebuild service state cache and sparse score history from checks."""
     from scoring_engine.models.round import Round
 
-    total = 0
-    for round_id, round_number in session.query(Round.id, Round.number).all():
-        total += materialize_round(session, round_id, round_number, clear_existing=True, commit=False)
+    session.query(ServiceScoreSnapshot).delete(synchronize_session=False)
+    services = session.query(Service).all()
+    services_by_id = {service.id: service for service in services}
+    states = {service.id: False for service in services}
+    team_totals = {}
+    prior_totals = {}
+    rounds = session.query(Round.id, Round.number).order_by(Round.number, Round.id).all()
+    check_iter = iter(
+        session.query(Round.number, Check.service_id, Check.result)
+        .join(Round, Check.round_id == Round.id)
+        .filter(Check.completed.is_(True))
+        .order_by(Round.number, Check.id)
+        .yield_per(1000)
+    )
+    check_row = next(check_iter, None)
+    written = 0
+    for round_id, round_number in rounds:
+        while check_row is not None and check_row[0] <= round_number:
+            _, service_id, result = check_row
+            service = services_by_id.get(service_id)
+            if service is not None:
+                is_up = bool(result)
+                was_up = states[service_id]
+                service.scoring_up = is_up
+                if is_up != was_up:
+                    team_totals[service.team_id] = team_totals.get(service.team_id, 0) + (
+                        int(service.points or 0) if is_up else -int(service.points or 0)
+                    )
+                    states[service_id] = is_up
+            check_row = next(check_iter, None)
+
+        for team_id, points in team_totals.items():
+            if prior_totals.get(team_id, 0) != points:
+                session.add(ServiceScoreSnapshot(
+                    round_id=round_id,
+                    round_number=round_number,
+                    team_id=team_id,
+                    service_points=points,
+                ))
+                prior_totals[team_id] = points
+                written += 1
     if commit:
         session.commit()
-    return total
+    return written
 
 
 def team_service_scores(session, sla_config=None, freeze_time=None):
-    """Return ``{team_id: service_score}`` for all teams, read from round_score.
+    """Return latest fixed-point service-state totals for all teams.
 
-    Replaces the full-history ``SUM(Service.points) JOIN checks GROUP BY team``
-    scans on the scoreboard and overview. Dynamic scoring, when enabled, is applied
-    per round from the stored raw points and ``round_number`` -- exactly as the old
-    per-round path did -- so behaviour is unchanged.
-
-    ``freeze_time`` (naive UTC) restricts the total to rounds that closed at/before
-    that instant -- the wall-clock scoreboard freeze.
+    Dynamic multipliers do not apply to this fork's current-state scores. A freeze
+    selects the last snapshot available at that time.
     """
-    from scoring_engine.sla import apply_dynamic_scoring_to_round, get_sla_config
-
-    if sla_config is None:
-        sla_config = get_sla_config()
-
-    if not sla_config.dynamic_enabled:
-        return all_team_service_scores(session, freeze_time=freeze_time)
-
-    # Dynamic: each round_score row already holds a team's per-round total, so apply
-    # the multiplier per row keyed on the stored round_number.
-    scores = {}
-    query = session.query(RoundScore.team_id, RoundScore.round_number, RoundScore.service_points)
+    query = session.query(
+        ServiceScoreSnapshot.team_id,
+        ServiceScoreSnapshot.round_number,
+        ServiceScoreSnapshot.service_points,
+    )
     query = _round_freeze_filter(query, freeze_time)
-    for team_id, round_number, service_points in query.all():
-        scores[team_id] = scores.get(team_id, 0) + apply_dynamic_scoring_to_round(
-            round_number, service_points, sla_config
-        )
+    from scoring_engine.models.team import Team
+
+    scores = {team_id: 0 for (team_id,) in session.query(Team.id).all()}
+    seen = set()
+    rows = query.order_by(ServiceScoreSnapshot.round_number.desc(), ServiceScoreSnapshot.id.desc()).all()
+    for team_id, _, points in rows:
+        if team_id not in seen:
+            scores[team_id] = int(points or 0)
+            seen.add(team_id)
     return scores
 
 
 def all_team_service_scores(session, freeze_time=None):
-    """Raw ``{team_id: service_score}`` for every team, no dynamic multiplier.
-
-    Backs ``Team.place`` (raw ranking) and the non-dynamic branch of
-    :func:`team_service_scores`. ``freeze_time`` restricts to rounds closed at/before
-    the freeze.
-    """
-    query = session.query(RoundScore.team_id, func.sum(RoundScore.service_points))
-    query = _round_freeze_filter(query, freeze_time)
-    rows = query.group_by(RoundScore.team_id).all()
-    return {team_id: int(total or 0) for team_id, total in rows}
+    """Return latest service-state totals, optionally frozen."""
+    return team_service_scores(session, freeze_time=freeze_time)
 
 
 def team_service_score(session, team_id, freeze_time=None):
-    """Raw (un-weighted, un-multiplied) service score for one team from round_score.
-
-    Matches the historical semantics of ``Team.current_score`` -- callers that want
-    dynamic scoring go through :func:`team_service_scores`.
-    """
-    query = session.query(func.coalesce(func.sum(RoundScore.service_points), 0)).filter(RoundScore.team_id == team_id)
-    query = _round_freeze_filter(query, freeze_time)
-    return int(query.scalar() or 0)
+    """Current service-state total for one team."""
+    return int(team_service_scores(session, freeze_time=freeze_time).get(team_id, 0))
 
 
 def team_adjustment_totals(session, freeze_time=None):
@@ -395,12 +417,11 @@ def apply_consecutive_failures(session, pass_service_ids, fail_counts):
     holds in memory -- so it never queries the round's still-pending checks (which
     would autoflush them ahead of the single atomic round commit). The caller
     wraps this in ``session.no_autoflush`` and lets the round's own commit persist
-    the updates atomically with the checks and round_score.
+    the updates atomically with the checks and state snapshots.
 
     A service that passed at least once this round resets to 0; a service that
     only failed increments by its number of failing checks this round (the scan
-    counts per check, and round_score already scores multi-environment services
-    per check, so the streak does too).
+    counts per completed check, so the streak does too).
     """
     from collections import defaultdict
 
@@ -461,6 +482,32 @@ def recompute_consecutive_failures_cache(session, service_ids=None, commit=True)
         session.commit()
 
 
+def recompute_service_scoring_states(session, service_ids=None, commit=True):
+    """Repair cached up/down state from each service's latest completed check."""
+    latest = (
+        session.query(Check.service_id, func.max(Check.id).label("check_id"))
+        .filter(Check.completed.is_(True))
+    )
+    if service_ids is not None:
+        service_ids = list(service_ids)
+        if not service_ids:
+            return
+        latest = latest.filter(Check.service_id.in_(service_ids))
+    latest = latest.group_by(Check.service_id).subquery()
+    states = dict(
+        session.query(Check.service_id, Check.result)
+        .join(latest, latest.c.check_id == Check.id)
+        .all()
+    )
+    services = session.query(Service)
+    if service_ids is not None:
+        services = services.filter(Service.id.in_(service_ids))
+    for service in services.all():
+        service.scoring_up = bool(states.get(service.id, False))
+    if commit:
+        session.commit()
+
+
 def team_penalties(session, config):
     """Return ``{team_id: total_sla_penalty}`` for every team, batched.
 
@@ -510,16 +557,5 @@ def team_penalties(session, config):
 
 
 def team_dynamic_service_score(session, team_id, sla_config):
-    """One team's service score with the dynamic multiplier applied per round.
-
-    Reads the team's per-round raw points from round_score and applies the
-    multiplier keyed on the stored round_number -- the same result as the old
-    full-history GROUP BY over checks.
-    """
-    from scoring_engine.sla import apply_dynamic_scoring_to_round
-
-    total = 0
-    rows = session.query(RoundScore.round_number, RoundScore.service_points).filter(RoundScore.team_id == team_id).all()
-    for round_number, service_points in rows:
-        total += apply_dynamic_scoring_to_round(round_number, service_points, sla_config)
-    return total
+    """Compatibility alias: current-state scores are never dynamically multiplied."""
+    return team_service_score(session, team_id)

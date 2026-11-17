@@ -98,6 +98,7 @@ def make_check(service=None, round_obj=None, result=True, output="", commit=True
     if round_obj is None:
         round_obj = make_round(commit=False)
     check = Check(service=service, round=round_obj, result=result, output=output)
+    check.completed = True
     db.session.add(check)
     if commit:
         db.session.commit()

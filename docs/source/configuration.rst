@@ -101,6 +101,40 @@ Configuration Keys
    * - inject_scores_visible
      - A boolean to show inject scores on the public scoreboard (default: False, private grading)
 
+Practical exam check appearance
+-------------------------------
+
+For practical exam mode, each Blue-team service in ``bin/competition.yaml``
+can set ``exam_display`` to control its label on the Blue Overview and the
+score category for its points. The sample competition marks SSH and HTTP as
+named availability services:
+
+.. code-block:: yaml
+
+   - name: SSH
+     exam_display: name
+     check_name: SSHCheck
+     port: 22
+     points: 150
+   - name: HTTP
+     exam_display: name
+     check_name: HTTPCheck
+     port: 80
+     points: 100
+
+Use these values:
+
+* ``name`` displays the configured service name and counts points as Service
+  check points.
+* ``finding`` displays an anonymous ``Finding N`` label and counts points as
+  Threat check points. This is the default when the field is omitted.
+* ``threat`` displays an anonymous ``Threat N`` label and also counts points
+  as Threat check points.
+
+The field belongs on each service entry. Updating ``bin/competition.yaml``
+affects a newly initialized database; an existing database must have its
+service ``exam_display`` values updated separately.
+
 
 Session Secret Key
 ------------------

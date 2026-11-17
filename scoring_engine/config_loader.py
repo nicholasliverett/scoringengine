@@ -94,6 +94,12 @@ class ConfigLoader(object):
             "int",
         )
 
+        self.exam_participation_points = self.parse_sources(
+            "exam_participation_points",
+            int(self.parser["OPTIONS"].get("exam_participation_points", "100")),
+            "int",
+        )
+
         self.engine_paused = self.parse_sources(
             "engine_paused",
             self.parser["OPTIONS"]["engine_paused"].lower() == "true",

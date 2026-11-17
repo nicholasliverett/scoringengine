@@ -1,19 +1,33 @@
 from collections import defaultdict
+from datetime import timedelta
 
-from flask import jsonify
+from flask import abort, jsonify, request
 from flask_login import current_user
 from sqlalchemy.sql import func
 
 from scoring_engine.cache import cache
+from scoring_engine.datetime_utils import ensure_utc_aware
 from scoring_engine.db import db
 from scoring_engine.models.check import Check
+from scoring_engine.models.exam_credential import ExamParticipation
 from scoring_engine.models.round import Round
+from scoring_engine.models.score_adjustment import ScoreAdjustment
 from scoring_engine.models.service import Service
 from scoring_engine.models.setting import Setting
 from scoring_engine.models.team import Team
 from scoring_engine.sla import get_sla_config
 
 from . import make_cache_key, mod
+
+
+@mod.before_request
+def private_exam_overview():
+    if not request.path.startswith("/api/overview/"):
+        return None
+    if not current_user.is_authenticated or not (current_user.is_blue_team or current_user.is_white_team):
+        abort(404)
+    if current_user.is_blue_team and request.path != "/api/overview/get_round_data":
+        abort(404)
 
 
 def get_anonymize_mode():
@@ -106,7 +120,6 @@ def _get_overview_data_cached(anonymize, show_both):
 
 
 @mod.route("/api/overview/get_round_data")
-@cache.memoize()
 def overview_get_round_data():
     round_obj = db.session.query(Round).order_by(Round.number.desc()).first()
     if round_obj:
@@ -116,7 +129,36 @@ def overview_get_round_data():
         round_start = ""
         number = 0
     engine_paused = Setting.get_setting("engine_paused").value
-    data = {"round_start": round_start, "number": number, "engine_paused": engine_paused}
+    target_round_time = Setting.get_setting("target_round_time")
+    try:
+        interval = int(target_round_time.value) if target_round_time else 0
+    except (TypeError, ValueError):
+        interval = 0
+
+    next_round_at = None
+    if engine_paused:
+        next_round_status = "paused"
+    elif round_obj is None:
+        next_round_status = "waiting"
+    elif round_obj.round_end is None:
+        next_round_status = "running"
+    else:
+        if interval <= 0:
+            next_round_status = "unknown"
+        else:
+            next_round_start = ensure_utc_aware(round_obj.round_start) + timedelta(seconds=interval)
+            round_end = ensure_utc_aware(round_obj.round_end)
+            next_round_at = max(next_round_start, round_end).isoformat()
+            next_round_status = "scheduled"
+
+    data = {
+        "round_start": round_start,
+        "number": number,
+        "engine_paused": engine_paused,
+        "next_round_at": next_round_at,
+        "next_round_status": next_round_status,
+        "target_round_time": interval if interval > 0 else None,
+    }
     return jsonify(data)
 
 
@@ -143,7 +185,7 @@ def overview_get_data():
     values line up with the blue team columns from ``/api/overview/get_columns``.
     Values are pure data (no markup) - the front end owns the presentation:
 
-    - ``Current Score`` / ``Current Place``: stringified integers
+    - ``Current Score`` / ``Current Place`` / ``Attendance Credit``: stringified integers
     - ``SLA Penalties``: penalty magnitude as an integer (0 when no penalty)
     - ``Services Up`` / ``Services Down``: this round's up/down counts as integers
     - service rows: check result booleans (or ``None`` when unchecked)
@@ -161,74 +203,51 @@ def overview_get_data():
     services_up = ["Services Up"]
     services_down = ["Services Down"]
     sla_penalties_row = ["SLA Penalties"]
+    attendance_credit_row = ["Attendance Credit"]
 
     num_up_services = dict(
-        db.session.query(
-            Service.team_id,
-            func.count(Service.team_id),
-        )
-        .join(Check)
-        .join(Round)
-        .filter(Check.result.is_(True))
-        .filter(Round.number == last_round)
-        .group_by(Service.team_id)
-        .all()
+        db.session.query(Service.team_id, func.count(Service.team_id))
+        .filter(Service.scoring_up.is_(True))
+        .group_by(Service.team_id).all()
     )
 
     num_down_services = dict(
-        db.session.query(
-            Service.team_id,
-            func.count(Service.team_id),
-        )
-        .join(Check)
-        .join(Round)
-        .filter(Check.result.is_(False))
-        .filter(Round.number == last_round)
-        .group_by(Service.team_id)
-        .all()
+        db.session.query(Service.team_id, func.count(Service.team_id))
+        .filter(Service.scoring_up.is_(False))
+        .group_by(Service.team_id).all()
     )
 
     if len(blue_team_ids) > 0:
-        # Team service scores (with dynamic multipliers when enabled) from the
-        # materialized round_score table -- no full-history scan per render.
-        from scoring_engine.scores import team_penalties, team_service_scores
+        # Team scores reflect the latest service state, with no round accumulation.
+        from scoring_engine.scores import team_service_scores
 
         from . import get_effective_freeze
 
         _, freeze_time = get_effective_freeze()
         team_scores = team_service_scores(db.session, sla_config, freeze_time=freeze_time)
-        # All teams' penalties in a couple of grouped queries (see scores.team_penalties).
-        penalties = team_penalties(db.session, sla_config) if sla_config.sla_enabled else {}
-
-        # Calculate adjusted scores with SLA penalties
-        adjusted_scores_dict = {}
+        attendance_points = dict(
+            db.session.query(ExamParticipation.team_id, ScoreAdjustment.points)
+            .join(ScoreAdjustment, ExamParticipation.score_adjustment_id == ScoreAdjustment.id)
+            .filter(ExamParticipation.team_id.in_(blue_team_ids))
+            .all()
+        )
+        total_scores = {
+            team_id: int(team_scores.get(team_id, 0)) + int(attendance_points.get(team_id, 0))
+            for team_id in blue_team_ids
+        }
         penalties_dict = {}
         for blue_team_id in blue_team_ids:
-            base_score = team_scores.get(blue_team_id, 0)
-            if sla_config.sla_enabled:
-                penalty = penalties.get(blue_team_id, 0)
-                penalties_dict[blue_team_id] = penalty
-                if sla_config.allow_negative:
-                    adjusted_scores_dict[blue_team_id] = base_score - penalty
-                else:
-                    adjusted_scores_dict[blue_team_id] = max(0, base_score - penalty)
-            else:
-                penalties_dict[blue_team_id] = 0
-                adjusted_scores_dict[blue_team_id] = base_score
+            penalties_dict[blue_team_id] = 0
 
-        # Use adjusted scores for ranking when SLA is enabled
-        scores_for_ranking = adjusted_scores_dict if sla_config.sla_enabled else team_scores
+        scores_for_ranking = total_scores
 
         # Calculate ranks with tie handling
         ranks_dict = calculate_ranks(scores_for_ranking)
 
         for blue_team_id in blue_team_ids:
-            # Show adjusted score when SLA is enabled, base score otherwise
-            if sla_config.sla_enabled:
-                current_scores.append(str(adjusted_scores_dict.get(blue_team_id, 0)))
-            else:
-                current_scores.append(str(team_scores.get(blue_team_id, 0)))
+            current_scores.append(str(total_scores[blue_team_id]))
             current_places.append(str(ranks_dict.get(blue_team_id, 0)))
+            attendance_credit_row.append(str(attendance_points.get(blue_team_id, 0)))
             # Up and down counts as separate rows so each cell holds a single
             # value -- a combined "up / down" wraps in a narrow team column and
             # makes the row height jump around.
@@ -239,10 +258,8 @@ def overview_get_data():
             sla_penalties_row.append(penalties_dict.get(blue_team_id, 0))
 
         data.append(current_scores)
+        data.append(attendance_credit_row)
         data.append(current_places)
-        # Show SLA penalties row when SLA is enabled
-        if sla_config.sla_enabled:
-            data.append(sla_penalties_row)
         data.append(services_up)
         data.append(services_down)
 

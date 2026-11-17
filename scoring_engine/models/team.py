@@ -1,7 +1,5 @@
 import colorsys
-import itertools
 import random
-from collections import defaultdict
 
 from sqlalchemy import Column, Integer, String, func
 from sqlalchemy.orm import relationship
@@ -111,10 +109,7 @@ class Team(Base):
     @property
     def current_score(self):
         """
-        Current raw service score, read from the materialized round_score table
-        instead of re-summing the full check history on every access. Identical in
-        value to the old ``SUM(Service.points) JOIN checks WHERE result`` -- the
-        engine writes one round_score row per team per round at round close.
+        Current raw service-state total from the latest sparse score snapshot.
         """
         from scoring_engine.scores import team_service_score
 
@@ -141,9 +136,9 @@ class Team(Base):
     @property
     def place(self):
         """
-        Calculate team's current place/rank based on raw service scores, read from
-        the materialized round_score table (no full-history scan). Ranking is by raw
-        points, matching the historical behaviour of this property.
+        Calculate team's current place/rank from the latest service-state
+        snapshots (no full-history scan). Service points are fixed while up and
+        zero while down.
         WARNING: still O(all teams) per access -- avoid calling in loops or
         templates. For bulk operations calculate ranks once; see
         scoring_engine/web/views/api/overview.py for a batch implementation.
@@ -306,43 +301,41 @@ class Team(Base):
         return mapping
 
     def get_array_of_scores(self, max_round):
-        """Cumulative raw service score at each round 0..max_round.
-
-        Reads per-round points from round_score, keyed on round_number. (The old
-        implementation grouped by round_id but filled the 0..max_round range with
-        round *numbers*, which only lined up when id == number; keying on
-        round_number is both correct and free of a full-history scan.)
-        """
-        from scoring_engine.models.round_score import RoundScore
+        """Current service-state total at each round 0..max_round."""
+        from scoring_engine.models.service_score_snapshot import ServiceScoreSnapshot
 
         rows = (
-            db.session.query(RoundScore.round_number, RoundScore.service_points)
-            .filter(RoundScore.team_id == self.id)
-            .filter(RoundScore.round_number <= max_round)
+            db.session.query(ServiceScoreSnapshot.round_number, ServiceScoreSnapshot.service_points)
+            .filter(ServiceScoreSnapshot.team_id == self.id)
+            .filter(ServiceScoreSnapshot.round_number <= max_round)
             .all()
         )
-        by_round = defaultdict(int)
+        by_round = {}
         for round_number, points in rows:
-            by_round[round_number] += points
-
-        per_round = [by_round.get(i, 0) for i in range(0, max_round + 1)]
-        return list(itertools.accumulate(per_round))
+            by_round[round_number] = int(points or 0)
+        current = 0
+        scores = []
+        for round_number in range(0, max_round + 1):
+            current = by_round.get(round_number, current)
+            scores.append(current)
+        return scores
 
     # TODO - Can this be deprecated, it only exists in tests
     def get_round_scores(self, round_num):
         if round_num == 0:
             return 0
 
-        from scoring_engine.models.round_score import RoundScore
+        from scoring_engine.models.service_score_snapshot import ServiceScoreSnapshot
 
         score = (
-            db.session.query(func.coalesce(func.sum(RoundScore.service_points), 0))
-            .filter(RoundScore.team_id == self.id)
-            .filter(RoundScore.round_number == round_num)
-            .scalar()
+            db.session.query(ServiceScoreSnapshot.service_points)
+            .filter(ServiceScoreSnapshot.team_id == self.id)
+            .filter(ServiceScoreSnapshot.round_number <= round_num)
+            .order_by(ServiceScoreSnapshot.round_number.desc(), ServiceScoreSnapshot.id.desc())
+            .first()
         )
 
-        return int(score) if score else 0
+        return int(score[0] or 0) if score else 0
 
     @staticmethod
     def get_all_blue_teams():

@@ -90,7 +90,7 @@ class TestServiceScoreFreeze:
         make_check(service=svc, round_obj=r2, result=True)
         materialize_all_rounds(db.session)
 
-        assert all_team_service_scores(db.session) == {team.id: 200}  # live
+        assert all_team_service_scores(db.session) == {team.id: 100}  # live current state
         assert all_team_service_scores(db.session, freeze_time=FREEZE) == {team.id: 100}  # frozen
 
     def test_round_still_open_is_excluded_by_freeze(self):
@@ -176,7 +176,7 @@ class TestFreezeEndpoints:
 
         _login(self.client, "blueuser")
         resp = self.client.post("/api/admin/freeze", json={"freeze_time": "2026-01-01T10:30:00"})
-        assert resp.status_code == 403
+        assert resp.status_code == 404
 
 
 class TestScoreboardFreezeView:
@@ -194,15 +194,13 @@ class TestScoreboardFreezeView:
 
         from tests.scoring_engine.conftest import _login
 
-        # White: live (both rounds -> 200)
+        # White: live (the service contributes its 100 points once)
         _login(test_client, "whiteuser")
         white_data = test_client.get("/api/scoreboard/get_bar_data").json
         wi = white_data["labels"].index("Blue Team")
-        assert white_data["service_scores"][wi] == "200"
+        assert white_data["service_scores"][wi] == "100"
 
-        # Blue (a competitor): frozen (only round 1 -> 100)
+        # Blue competitors have no access to the public scoreboard.
         test_client.get("/logout")
         _login(test_client, "blueuser")
-        blue_data = test_client.get("/api/scoreboard/get_bar_data").json
-        bi = blue_data["labels"].index("Blue Team")
-        assert blue_data["service_scores"][bi] == "100"
+        assert test_client.get("/api/scoreboard/get_bar_data").status_code == 404

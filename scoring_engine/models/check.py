@@ -20,8 +20,7 @@ class Check(Base):
         # Service.checks_reversed: WHERE service_id = ? ORDER BY round_id.
         # Without this, MySQL scans every check row and filesorts.
         Index("ix_checks_service_id_round_id", "service_id", "round_id"),
-        # Service.score_earned: COUNT(*) WHERE service_id = ? AND result = 1,
-        # and Service.max_score: COUNT(*) WHERE service_id = ?.
+        # Service history views: WHERE service_id = ? AND result = 1.
         Index("ix_checks_service_id_result", "service_id", "result"),
         # api/overview.py num_up_services / num_down_services and
         # api/admin.py round stats: WHERE round_id = ? AND result = ?.

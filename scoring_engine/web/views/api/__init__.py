@@ -76,6 +76,7 @@ from . import (
     admin,
     agent,
     announcements,
+    exam,
     flags,
     injects,
     notifications,

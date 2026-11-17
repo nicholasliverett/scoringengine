@@ -1,4 +1,4 @@
-import random
+﻿import random
 
 from scoring_engine.models.check import Check
 from scoring_engine.models.environment import Environment
@@ -16,16 +16,15 @@ def populate_sample_data(session):
     session.add(service)
     round_1 = Round(number=1)
     session.add(round_1)
-    check_1 = Check(service=service, result=True, output="Good output", round=round_1)
+    check_1 = Check(completed=True, service=service, result=True, output="Good output", round=round_1)
     session.add(check_1)
 
     round_2 = Round(number=2)
     session.add(round_2)
-    check_2 = Check(service=service, result=False, output="Bad output", round=round_2)
+    check_2 = Check(completed=True, service=service, result=False, output="Bad output", round=round_2)
     session.add(check_2)
     session.commit()
-    # Materialize round_score, as the engine does at round close, so score reads
-    # (now backed by round_score) reflect these checks.
+    # Materialize current service state, as the engine does at round close.
     from scoring_engine.scores import materialize_all_rounds
 
     materialize_all_rounds(session)
@@ -76,7 +75,7 @@ def generate_sample_model_tree(model, session):
         return round_obj
 
     # Checks
-    check = Check(round=round_obj, service=service)
+    check = Check(completed=True, round=round_obj, service=service)
     session.add(check)
     session.commit()
     if model == "Check":

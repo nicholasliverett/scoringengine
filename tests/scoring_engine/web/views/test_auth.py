@@ -22,7 +22,7 @@ class TestAuth:
         return user
 
     def _auth_and_get_path(self, path):
-        self.client.post("/login", data={"username": "testuser", "password": "testpass"})
+        self.client.post("/login/password", data={"username": "testuser", "password": "testpass"})
         return self.client.get(path)
 
     def test_login_page_auth_required(self):

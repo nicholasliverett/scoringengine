@@ -7,7 +7,7 @@ from random import choice, randint, sample
 
 from scoring_engine.competition import Competition
 from scoring_engine.config import config
-from scoring_engine.db import db, delete_db, init_db, verify_db_ready
+from scoring_engine.db import db, delete_db, init_db, run_migrations, verify_db_ready
 from scoring_engine.engine.basic_check import CHECK_FAILURE_TEXT, CHECK_SUCCESS_TEXT, CHECK_TIMED_OUT_TEXT
 from scoring_engine.logger import logger
 from scoring_engine.models.check import Check
@@ -71,7 +71,9 @@ with app.app_context():
     db_ready = verify_db_ready()
 
     if db_ready and not options.overwrite_db:
-        logger.info("Database already initialized; skipping setup. (use --overwrite-db to reset)")
+        logger.info("Database already initialized; applying pending migrations.")
+        run_migrations()
+        logger.info("Database migrations complete; skipping setup. (use --overwrite-db to reset)")
         sys.exit(0)
 
     logger.info("Setting up DB")

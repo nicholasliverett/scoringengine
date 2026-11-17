@@ -20,6 +20,7 @@ Implemented Checks
 .. include:: checks/smtp.rst
 .. include:: checks/ssh.rst
 .. include:: checks/tcp.rst
+.. include:: checks/command.rst
 .. include:: checks/telnet.rst
 .. include:: checks/vnc.rst
 .. include:: checks/webapp.rst

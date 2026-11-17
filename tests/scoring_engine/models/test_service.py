@@ -1,4 +1,4 @@
-from scoring_engine.db import db
+﻿from scoring_engine.db import db
 from scoring_engine.models.account import Account
 from scoring_engine.models.check import Check
 from scoring_engine.models.environment import Environment
@@ -64,7 +64,7 @@ class TestService:
         assert service.port == 100
         assert service.points == 500
         assert service.score_earned == 0
-        assert service.max_score == 0
+        assert service.max_score == 500
         assert service.percent_earned == 0
 
     def test_last_check_result_false(self):
@@ -72,11 +72,11 @@ class TestService:
         service = Service(name="Example Service", team=team, check_name="ICMP IPv4 Check", host="127.0.0.1")
         db.session.add(service)
         round_obj = generate_sample_model_tree("Round", db.session)
-        check_1 = Check(round=round_obj, service=service, result=True, output="Good output")
+        check_1 = Check(completed=True, round=round_obj, service=service, result=True, output="Good output")
         db.session.add(check_1)
-        check_2 = Check(round=round_obj, service=service, result=True, output="Good output")
+        check_2 = Check(completed=True, round=round_obj, service=service, result=True, output="Good output")
         db.session.add(check_2)
-        check_3 = Check(round=round_obj, service=service, result=False, output="Check exceeded time")
+        check_3 = Check(completed=True, round=round_obj, service=service, result=False, output="Check exceeded time")
         db.session.add(check_3)
         db.session.commit()
         assert service.last_check_result() is False
@@ -86,11 +86,11 @@ class TestService:
         service = Service(name="Example Service", team=team, check_name="ICMP IPv4 Check", host="127.0.0.1")
         db.session.add(service)
         round_obj = generate_sample_model_tree("Round", db.session)
-        check_1 = Check(round=round_obj, service=service, result=False, output="Check exceeded time")
+        check_1 = Check(completed=True, round=round_obj, service=service, result=False, output="Check exceeded time")
         db.session.add(check_1)
-        check_2 = Check(round=round_obj, service=service, result=False, output="Check exceeded time")
+        check_2 = Check(completed=True, round=round_obj, service=service, result=False, output="Check exceeded time")
         db.session.add(check_2)
-        check_3 = Check(round=round_obj, service=service, result=True, output="Good output")
+        check_3 = Check(completed=True, round=round_obj, service=service, result=True, output="Good output")
         db.session.add(check_3)
         db.session.commit()
         assert service.last_check_result() is True
@@ -105,11 +105,11 @@ class TestService:
     def test_checks(self):
         service = generate_sample_model_tree("Service", db.session)
         round_obj = generate_sample_model_tree("Round", db.session)
-        check_1 = Check(round=round_obj, service=service)
+        check_1 = Check(completed=True, round=round_obj, service=service)
         db.session.add(check_1)
-        check_2 = Check(round=round_obj, service=service)
+        check_2 = Check(completed=True, round=round_obj, service=service)
         db.session.add(check_2)
-        check_3 = Check(round=round_obj, service=service)
+        check_3 = Check(completed=True, round=round_obj, service=service)
         db.session.add(check_3)
         db.session.commit()
         assert service.checks == [check_1, check_2, check_3]
@@ -122,11 +122,11 @@ class TestService:
         db.session.add(round_obj_1)
         db.session.add(round_obj_2)
         db.session.add(round_obj_3)
-        check_1 = Check(round=round_obj_1, service=service)
+        check_1 = Check(completed=True, round=round_obj_1, service=service)
         db.session.add(check_1)
-        check_2 = Check(round=round_obj_2, service=service)
+        check_2 = Check(completed=True, round=round_obj_2, service=service)
         db.session.add(check_2)
-        check_3 = Check(round=round_obj_3, service=service)
+        check_3 = Check(completed=True, round=round_obj_3, service=service)
         db.session.add(check_3)
         db.session.commit()
         assert service.checks_reversed == [check_3, check_2, check_1]
@@ -155,56 +155,58 @@ class TestService:
 
     def test_score_earned(self):
         service = generate_sample_model_tree("Service", db.session)
-        check_1 = Check(service=service, result=True, output="Good output")
-        check_2 = Check(service=service, result=True, output="Good output")
-        check_3 = Check(service=service, result=True, output="Good output")
-        check_4 = Check(service=service, result=True, output="Good output")
-        check_5 = Check(service=service, result=False, output="bad output")
+        check_1 = Check(completed=True, service=service, result=True, output="Good output")
+        check_2 = Check(completed=True, service=service, result=True, output="Good output")
+        check_3 = Check(completed=True, service=service, result=True, output="Good output")
+        check_4 = Check(completed=True, service=service, result=True, output="Good output")
+        check_5 = Check(completed=True, service=service, result=False, output="bad output")
         db.session.add(check_1)
         db.session.add(check_2)
         db.session.add(check_3)
         db.session.add(check_4)
         db.session.add(check_5)
+        service.scoring_up = False
         db.session.commit()
-        assert service.score_earned == 400
+        assert service.score_earned == 0
 
     def test_max_score(self):
         service = generate_sample_model_tree("Service", db.session)
-        check_1 = Check(service=service, result=True, output="Good output")
-        check_2 = Check(service=service, result=True, output="Good output")
-        check_3 = Check(service=service, result=True, output="Good output")
-        check_4 = Check(service=service, result=True, output="Good output")
-        check_5 = Check(service=service, result=False, output="bad output")
+        check_1 = Check(completed=True, service=service, result=True, output="Good output")
+        check_2 = Check(completed=True, service=service, result=True, output="Good output")
+        check_3 = Check(completed=True, service=service, result=True, output="Good output")
+        check_4 = Check(completed=True, service=service, result=True, output="Good output")
+        check_5 = Check(completed=True, service=service, result=False, output="bad output")
         db.session.add(check_1)
         db.session.add(check_2)
         db.session.add(check_3)
         db.session.add(check_4)
         db.session.add(check_5)
         db.session.commit()
-        assert service.max_score == 500
+        assert service.max_score == 100
 
     def test_percent_earned(self):
         service = generate_sample_model_tree("Service", db.session)
         service = generate_sample_model_tree("Service", db.session)
-        check_1 = Check(service=service, result=True, output="Good output")
-        check_2 = Check(service=service, result=True, output="Good output")
-        check_3 = Check(service=service, result=True, output="Good output")
-        check_4 = Check(service=service, result=True, output="Good output")
-        check_5 = Check(service=service, result=False, output="bad output")
+        check_1 = Check(completed=True, service=service, result=True, output="Good output")
+        check_2 = Check(completed=True, service=service, result=True, output="Good output")
+        check_3 = Check(completed=True, service=service, result=True, output="Good output")
+        check_4 = Check(completed=True, service=service, result=True, output="Good output")
+        check_5 = Check(completed=True, service=service, result=False, output="bad output")
         db.session.add(check_1)
         db.session.add(check_2)
         db.session.add(check_3)
         db.session.add(check_4)
         db.session.add(check_5)
+        service.scoring_up = False
         db.session.commit()
-        assert service.percent_earned == 80
+        assert service.percent_earned == 0
 
     def test_last_ten_checks_4_checks(self):
         service = generate_sample_model_tree("Service", db.session)
-        check_1 = Check(service=service, result=True, output="Good output")
-        check_2 = Check(service=service, result=True, output="Good output")
-        check_3 = Check(service=service, result=True, output="Good output")
-        check_4 = Check(service=service, result=True, output="Good output")
+        check_1 = Check(completed=True, service=service, result=True, output="Good output")
+        check_2 = Check(completed=True, service=service, result=True, output="Good output")
+        check_3 = Check(completed=True, service=service, result=True, output="Good output")
+        check_4 = Check(completed=True, service=service, result=True, output="Good output")
         db.session.add(check_1)
         db.session.add(check_2)
         db.session.add(check_3)
@@ -214,21 +216,21 @@ class TestService:
 
     def test_last_ten_checks_15_checks(self):
         service = generate_sample_model_tree("Service", db.session)
-        check_1 = Check(service=service, result=True, output="Good output")
-        check_2 = Check(service=service, result=True, output="Good output")
-        check_3 = Check(service=service, result=True, output="Good output")
-        check_4 = Check(service=service, result=True, output="Good output")
-        check_5 = Check(service=service, result=True, output="Good output")
-        check_6 = Check(service=service, result=True, output="Good output")
-        check_7 = Check(service=service, result=True, output="Good output")
-        check_8 = Check(service=service, result=True, output="Good output")
-        check_9 = Check(service=service, result=True, output="Good output")
-        check_10 = Check(service=service, result=True, output="Good output")
-        check_11 = Check(service=service, result=True, output="Good output")
-        check_12 = Check(service=service, result=True, output="Good output")
-        check_13 = Check(service=service, result=True, output="Good output")
-        check_14 = Check(service=service, result=True, output="Good output")
-        check_15 = Check(service=service, result=True, output="Good output")
+        check_1 = Check(completed=True, service=service, result=True, output="Good output")
+        check_2 = Check(completed=True, service=service, result=True, output="Good output")
+        check_3 = Check(completed=True, service=service, result=True, output="Good output")
+        check_4 = Check(completed=True, service=service, result=True, output="Good output")
+        check_5 = Check(completed=True, service=service, result=True, output="Good output")
+        check_6 = Check(completed=True, service=service, result=True, output="Good output")
+        check_7 = Check(completed=True, service=service, result=True, output="Good output")
+        check_8 = Check(completed=True, service=service, result=True, output="Good output")
+        check_9 = Check(completed=True, service=service, result=True, output="Good output")
+        check_10 = Check(completed=True, service=service, result=True, output="Good output")
+        check_11 = Check(completed=True, service=service, result=True, output="Good output")
+        check_12 = Check(completed=True, service=service, result=True, output="Good output")
+        check_13 = Check(completed=True, service=service, result=True, output="Good output")
+        check_14 = Check(completed=True, service=service, result=True, output="Good output")
+        check_15 = Check(completed=True, service=service, result=True, output="Good output")
         db.session.add(check_1)
         db.session.add(check_2)
         db.session.add(check_3)
@@ -267,17 +269,17 @@ class TestService:
 
         round_1 = Round(number=1)
         db.session.add(round_1)
-        check_1 = Check(round=round_1, result=True, service=service)
+        check_1 = Check(completed=True, round=round_1, result=True, service=service)
         db.session.add(check_1)
 
         round_2 = Round(number=2)
         db.session.add(round_2)
-        check_2 = Check(round=round_2, result=True, service=service)
+        check_2 = Check(completed=True, round=round_2, result=True, service=service)
         db.session.add(check_2)
 
         round_3 = Round(number=3)
         db.session.add(round_3)
-        check_3 = Check(round=round_3, result=False, service=service)
+        check_3 = Check(completed=True, round=round_3, result=False, service=service)
         db.session.add(check_3)
         db.session.commit()
         assert service.check_result_for_round(1) is True
@@ -289,34 +291,37 @@ class TestService:
         db.session.add(team_1)
         service_1 = Service(name="Example Service 1", team=team_1, check_name="ICMP IPv4 Check", host="127.0.0.1")
         db.session.add(service_1)
-        check_1 = Check(service=service_1, result=True, output="Good output")
-        check_2 = Check(service=service_1, result=True, output="Good output")
+        check_1 = Check(completed=True, service=service_1, result=True, output="Good output")
+        check_2 = Check(completed=True, service=service_1, result=True, output="Good output")
         db.session.add(check_1)
         db.session.add(check_2)
+        team_1.services[0].scoring_up = True
         db.session.commit()
 
         team_2 = Team(name="Blue Team 2", color="Blue")
         db.session.add(team_2)
         service_1 = Service(name="Example Service 1", team=team_2, check_name="ICMP IPv4 Check", host="127.0.0.1")
         db.session.add(service_1)
-        check_1 = Check(service=service_1, result=True, output="Good output")
-        check_2 = Check(service=service_1, result=True, output="Good output")
+        check_1 = Check(completed=True, service=service_1, result=True, output="Good output")
+        check_2 = Check(completed=True, service=service_1, result=True, output="Good output")
         db.session.add(check_1)
         db.session.add(check_2)
+        team_2.services[0].scoring_up = True
         db.session.commit()
 
         team_3 = Team(name="Blue Team 3", color="Blue")
         db.session.add(team_3)
         service_1 = Service(name="Example Service 1", team=team_3, check_name="ICMP IPv4 Check", host="127.0.0.1")
         db.session.add(service_1)
-        check_1 = Check(service=service_1, result=True, output="Good output")
-        check_2 = Check(service=service_1, result=False, output="Good output")
+        check_1 = Check(completed=True, service=service_1, result=True, output="Good output")
+        check_2 = Check(completed=True, service=service_1, result=False, output="Good output")
         db.session.add(check_1)
         db.session.add(check_2)
+        team_3.services[0].scoring_up = False
         db.session.commit()
         assert team_1.services[0].rank == 1
         assert team_2.services[0].rank == 1
-        assert team_3.services[0].rank == 3
+        assert team_3.services[0].rank is None
 
     def test_rank_no_scores(self):
         team_1 = Team(name="Blue Team 1", color="Blue")
@@ -346,20 +351,22 @@ class TestService:
         db.session.add(team_1)
         service_1 = Service(name="Example Service 1", team=team_1, check_name="ICMP IPv4 Check", host="127.0.0.1")
         db.session.add(service_1)
-        check_1 = Check(service=service_1, result=True, output="Good output")
-        check_2 = Check(service=service_1, result=True, output="Good output")
+        check_1 = Check(completed=True, service=service_1, result=True, output="Good output")
+        check_2 = Check(completed=True, service=service_1, result=True, output="Good output")
         db.session.add(check_1)
         db.session.add(check_2)
+        team_1.services[0].scoring_up = True
         db.session.commit()
 
         team_2 = Team(name="Blue Team 2", color="Blue")
         db.session.add(team_2)
         service_1 = Service(name="Example Service 1", team=team_2, check_name="ICMP IPv4 Check", host="127.0.0.1")
         db.session.add(service_1)
-        check_1 = Check(service=service_1, result=True, output="Good output")
-        check_2 = Check(service=service_1, result=True, output="Good output")
+        check_1 = Check(completed=True, service=service_1, result=True, output="Good output")
+        check_2 = Check(completed=True, service=service_1, result=True, output="Good output")
         db.session.add(check_1)
         db.session.add(check_2)
+        team_2.services[0].scoring_up = True
         db.session.commit()
 
         team_3 = Team(name="Blue Team 3", color="Blue")

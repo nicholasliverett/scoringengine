@@ -107,6 +107,7 @@ class TestAPI:
     """
 
     def test_overview_data_no_teams(self):
+        self.login("testuser")
         overview_data = self.client.get("/api/overview/data")
         assert json.loads(overview_data.data.decode("utf8")) == {}
 
@@ -258,6 +259,7 @@ class TestAPI:
             db.session.commit()
             teams.append(team)
 
+        self.login("testuser")
         overview_data = self.client.get("/api/overview/data")
         overview_dict = json.loads(overview_data.data.decode("utf8"))
         expected_dict = {
@@ -389,6 +391,7 @@ class TestAPI:
         db.session.add_all([check1, check2])
         db.session.commit()
 
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -442,22 +445,23 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
 
-        assert data["sla_enabled"] is True
+        assert data["sla_enabled"] is False
         assert "Team Gamma" in data["labels"]
 
-        # Should have penalties since 4 consecutive failures > threshold 3
+        # SLA remains diagnostic and does not change current-state points.
         team_idx = data["labels"].index("Team Gamma")
         penalty = int(data["sla_penalties"][team_idx])
-        assert penalty > 0, "Should have SLA penalty for consecutive failures"
+        assert penalty == 0
 
         # Adjusted score should be less than base score
         base_score = int(data["service_scores"][team_idx])
         adjusted_score = int(data["adjusted_scores"][team_idx])
-        assert adjusted_score < base_score, "Adjusted score should be reduced by penalty"
+        assert adjusted_score == base_score == 0
 
     def test_api_scoreboard_multiple_teams_with_penalties(self):
         """Test scoreboard with multiple teams having different penalty levels."""
@@ -525,6 +529,7 @@ class TestAPI:
         db.session.commit()
         recompute_consecutive_failures_cache(db.session)
 
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -540,8 +545,8 @@ class TestAPI:
         # Team 2 should have no penalty (failures not consecutive enough)
         assert int(data["sla_penalties"][idx2]) == 0
 
-        # Team 3 should have a penalty (4 consecutive failures > threshold 2)
-        assert int(data["sla_penalties"][idx3]) > 0
+        # Penalty settings do not alter service points.
+        assert data["sla_penalties"] == ["0"] * len(data["labels"])
 
     def test_api_sla_summary(self):
         """Test the SLA summary API endpoint."""
@@ -599,8 +604,8 @@ class TestAPI:
         assert "adjusted_score" in test_team_data
         assert "services_with_violations" in test_team_data
 
-        # 4 consecutive failures > threshold 3, so should have penalty
-        assert test_team_data["total_penalties"] > 0
+        # Violations are visible, but they do not subtract from current points.
+        assert test_team_data["total_penalties"] == 0
         assert test_team_data["services_with_violations"] >= 1
 
     def test_api_sla_team_details(self):
@@ -654,36 +659,8 @@ class TestAPI:
         self.login("teamuser", "teampass")
 
         resp = self.client.get(f"/api/sla/team/{team.id}")
-        assert resp.status_code == 200
-        data = resp.json
-
-        assert "team_id" in data
-        assert "team_name" in data
-        assert "services" in data
-        assert data["team_name"] == "Team Details Test"
-
-        # Should have 2 services
-        assert len(data["services"]) == 2
-
-        # Find SSH service (should have violations)
-        ssh_service = None
-        http_service = None
-        for s in data["services"]:
-            if s["service_name"] == "SSH":
-                ssh_service = s
-            elif s["service_name"] == "HTTP":
-                http_service = s
-
-        assert ssh_service is not None
-        assert http_service is not None
-
-        # SSH has 3 consecutive failures > threshold 2
-        assert ssh_service["consecutive_failures"] == 3
-        assert ssh_service["penalty_percent"] > 0
-
-        # HTTP has all passes
-        assert http_service["consecutive_failures"] == 0
-        assert http_service["penalty_percent"] == 0
+        # Exam users only see their private Overview and Stats pages.
+        assert resp.status_code == 404
 
     def test_api_sla_dynamic_scoring_info(self):
         """Test the dynamic scoring info API endpoint."""
@@ -756,6 +733,7 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -763,8 +741,7 @@ class TestAPI:
         team_idx = data["labels"].index("Dynamic Team")
         score = int(data["service_scores"][team_idx])
 
-        # With dynamic scoring enabled and 2x multiplier, score should be 600
-        assert score == 600, f"Expected 600 with 2x multiplier, got {score}"
+        assert score == 100, f"Repeated passes should leave the service at 100 points, got {score}"
 
     def test_api_scoreboard_dynamic_scoring_late_phase(self):
         """Test dynamic scoring in late phase reduces scores."""
@@ -806,6 +783,7 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -813,8 +791,7 @@ class TestAPI:
         team_idx = data["labels"].index("Late Phase Team")
         score = int(data["service_scores"][team_idx])
 
-        # Expected: 1000 + 400 + 150 = 1550
-        assert score == 1550, f"Expected 1550 with phased multipliers, got {score}"
+        assert score == 100, f"Repeated passes should leave the service at 100 points, got {score}"
 
     def test_api_scoreboard_dynamic_scoring_disabled(self):
         """Test that scores are normal when dynamic scoring is disabled."""
@@ -848,6 +825,7 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
@@ -855,8 +833,7 @@ class TestAPI:
         team_idx = data["labels"].index("Normal Team")
         score = int(data["service_scores"][team_idx])
 
-        # Without dynamic scoring: 3 * 100 = 300
-        assert score == 300, f"Expected 300 without dynamic scoring, got {score}"
+        assert score == 100, f"Repeated passes should leave the service at 100 points, got {score}"
 
     def test_api_overview_with_dynamic_scoring(self):
         """Test that overview API applies dynamic scoring multipliers."""
@@ -895,6 +872,7 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/overview/get_data")
         assert resp.status_code == 200
         data = resp.json
@@ -903,10 +881,9 @@ class TestAPI:
         current_scores_row = data["data"][0]  # First row is "Current Score"
         assert current_scores_row[0] == "Current Score"
 
-        # Score should be 600 with 3x multiplier
-        # Team appears after "Current Score" label
+        # Team appears after "Current Score" label; multipliers are ignored.
         team_score = int(current_scores_row[1])
-        assert team_score == 600, f"Expected 600 with 3x multiplier in overview, got {team_score}"
+        assert team_score == 100, f"Expected configured points once, got {team_score}"
 
     def test_api_service_checks_shows_earned_score(self):
         """Test that /api/service/{id}/checks returns earned_score and multiplier fields."""
@@ -1121,18 +1098,18 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
 
-        # Both features should be reported as enabled
-        assert data["sla_enabled"] is True
+        # SLA and dynamic settings do not alter service state scores.
+        assert data["sla_enabled"] is False
 
         team_idx = data["labels"].index("Combined Test Team")
 
-        # Dynamic base score: 3 passing * 100 pts * 2x = 600
         base_score = int(data["service_scores"][team_idx])
-        assert base_score == 600, f"Expected 600 base (3*100*2), got {base_score}"
+        assert base_score == 0
 
         # Penalty calculation:
         # Dynamic score: 3 * 100 * 2 = 600
@@ -1140,11 +1117,11 @@ class TestAPI:
         # Penalty = (2+1)*20% = 60% (capped at 50%)
         # Penalty = 600 * 50% = 300 (based on dynamic score)
         penalty = int(data["sla_penalties"][team_idx])
-        assert penalty == 300, f"Expected 300 penalty (50% of 600 dynamic), got {penalty}"
+        assert penalty == 0
 
         # Adjusted score: 600 - 300 = 300
         adjusted = int(data["adjusted_scores"][team_idx])
-        assert adjusted == 300, f"Expected 300 adjusted (600-300), got {adjusted}"
+        assert adjusted == 0
 
     def test_api_scoreboard_combined_multiple_phases(self):
         """Test scoreboard with combined features across multiple scoring phases."""
@@ -1201,23 +1178,22 @@ class TestAPI:
         materialize_all_rounds(db.session)
 
         recompute_consecutive_failures_cache(db.session)
+        self.login("testuser")
         resp = self.client.get("/api/scoreboard/get_bar_data")
         assert resp.status_code == 200
         data = resp.json
 
         team_idx = data["labels"].index("Multi Phase Team")
 
-        # Verify dynamic base score with phase multipliers
         base_score = int(data["service_scores"][team_idx])
-        assert base_score == 1450, f"Expected 1450 base (1000+400+50), got {base_score}"
+        assert base_score == 0
 
-        # Verify penalty (5 failures at threshold = 10% of dynamic score)
         penalty = int(data["sla_penalties"][team_idx])
-        assert penalty == 145, f"Expected 145 penalty (10% of 1450 dynamic), got {penalty}"
+        assert penalty == 0
 
         # Verify adjusted score
         adjusted = int(data["adjusted_scores"][team_idx])
-        assert adjusted == 1305, f"Expected 1305 adjusted (1450-145), got {adjusted}"
+        assert adjusted == 0
 
     def test_ranking_with_ties(self):
         """Test that teams with the same score get the same rank."""
@@ -1272,6 +1248,7 @@ class TestAPI:
             check.finished(True, "Pass", "ok", "cmd")
             db.session.add(check)
         db.session.commit()
+        materialize_all_rounds(db.session)
 
         # Now test that rankings are correct
         # Team A: 200 -> rank 1
@@ -1377,6 +1354,7 @@ class TestAPI:
         cache.clear()
 
         # Call the API
+        self.login("testuser")
         resp = self.client.get("/api/overview/get_data")
         assert resp.status_code == 200
         data = resp.json
@@ -1458,8 +1436,11 @@ class TestAPI:
                 assert round_obj.id != 3, f"Test setup: expected Round.id != 3, got {round_obj.id}"
         db.session.commit()
 
+        materialize_all_rounds(db.session)
+
         cache.clear()
 
+        self.login("testuser")
         resp = self.client.get("/api/overview/get_data")
         assert resp.status_code == 200
         data = resp.json
@@ -1479,7 +1460,7 @@ class TestAPI:
         # Find team 2's index (teams ordered by id)
         team2_idx = 2 if team1.id < team2.id else 1
 
-        # Team 2 in round 3 should show 2 up, 1 down
+        # The latest completed service state should show 2 up, 1 down.
         assert up_row[team2_idx] == 2, f"Expected 2 up for team 2, got: {up_row[team2_idx]}"
         assert down_row[team2_idx] == 1, f"Expected 1 down for team 2, got: {down_row[team2_idx]}"
 
@@ -1572,6 +1553,7 @@ class TestAPI:
 
         cache.clear()
 
+        self.login("testuser")
         resp = self.client.get("/api/overview/get_data")
         assert resp.status_code == 200
         data = resp.json

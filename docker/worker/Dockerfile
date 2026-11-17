@@ -26,6 +26,22 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     --mount=type=bind,source=docker/worker/packs,target=/packs \
     /packs/db.sh
+    apt-get update && apt-get install -y --no-install-recommends \
+    apt-transport-https \
+    curl \
+    default-mysql-client \
+    dnsutils \
+    gpg \
+    iproute2 \
+    iputils-ping \
+    ldap-utils \
+    medusa \
+    netcat-openbsd \
+    nfs-common \
+    openvpn \
+    postgresql-client \
+    sudo \
+    xvfb
 
 FROM core-deps AS rdp-deps
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
