@@ -99,6 +99,72 @@ def test_host_number_offset_maps_team1_to_tenth_host(source_data):
     ]
 
 
+def test_ip_pattern_assigns_third_octet_hosts_and_exam_flags(source_data):
+    result, credentials, host_count = generator.build_competition(
+        source_data, 3, "TemplateBlue", ip_pattern="192.168.{team_number}.2"
+    )
+
+    blue_teams = [team for team in result["teams"] if team["color"] == "Blue"]
+    assert [team["services"][0]["host"] for team in blue_teams] == [
+        "192.168.1.2",
+        "192.168.2.2",
+        "192.168.3.2",
+    ]
+    assert [team["services"][1]["host"] for team in blue_teams] == [
+        "192.168.1.2",
+        "192.168.2.2",
+        "192.168.3.2",
+    ]
+    assert host_count == 2
+    assert [row["machine_ip"] for row in credentials] == ["192.168.1.2", "192.168.2.2", "192.168.3.2"]
+    assert len({row["exam_flag"] for row in credentials}) == 3
+
+
+@pytest.mark.parametrize(
+    ("pattern", "count", "message"),
+    [
+        ("192.168.1.2", 2, "must include"),
+        ("192.168.{team_number}.2", 256, "invalid IPv4"),
+        ("", 2, "non-empty"),
+    ],
+)
+def test_rejects_bad_ip_patterns(source_data, pattern, count, message):
+    with pytest.raises(ValueError, match=message):
+        generator.build_competition(source_data, count, ip_pattern=pattern)
+
+
+def test_rejects_start_ip_combined_with_ip_pattern(source_data):
+    with pytest.raises(ValueError, match="only one"):
+        generator.build_competition(source_data, 2, start_ip="192.168.1.10", ip_pattern="192.168.{team_number}.2")
+
+
+def test_main_ip_pattern_writes_team_subnets(tmp_path):
+    template_path = Path(__file__).resolve().parents[2] / "configs" / "competition-ssh-template.yaml"
+    output_dir = tmp_path / "out"
+
+    code = generator.main(
+        [
+            "3",
+            "--source",
+            str(template_path),
+            "--ip-pattern",
+            "192.168.{team_number}.2",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    generated = generator.yaml.safe_load((output_dir / "competition.yaml").read_text(encoding="utf-8"))
+    blue_teams = [team for team in generated["teams"] if team["color"] == "Blue"]
+    assert code == 0
+    assert [team["services"][0]["host"] for team in blue_teams] == ["192.168.1.2", "192.168.2.2", "192.168.3.2"]
+    pillar_top = generator.yaml.safe_load(
+        (output_dir / "salt" / "pillar" / "top.sls").read_text(encoding="utf-8")
+    )
+    assert "G@ipv4:192.168.1.2" in pillar_top["base"]
+    assert "G@ipv4:192.168.3.2" in pillar_top["base"]
+
+
 def test_start_ip_assigns_consecutive_hosts_and_per_team_exam_flags(source_data):
     result, credentials, host_count = generator.build_competition(source_data, 3, "TemplateBlue", start_ip="192.168.1.10")
 

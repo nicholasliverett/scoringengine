@@ -68,6 +68,25 @@ def generate_password(used_passwords):
             return password
 
 
+def team_ips_from_pattern(pattern, count, host_number_offset=0):
+    """Build one IPv4 address per team from a pattern such as 192.168.{team_number}.2."""
+    if not isinstance(pattern, str) or not pattern:
+        raise ValueError("IP pattern must be a non-empty string")
+    if "{team_number}" not in pattern and "{team_number_padded}" not in pattern:
+        raise ValueError("IP pattern must include {team_number} or {team_number_padded}")
+    team_ips = []
+    for number in range(1, count + 1):
+        rendered = render_host(pattern, number, f"Team{number}", host_number_offset)
+        try:
+            address = ipaddress.IPv4Address(rendered)
+        except ipaddress.AddressValueError as error:
+            raise ValueError(f"IP pattern produced an invalid IPv4 address for team {number}: {rendered}") from error
+        team_ips.append(str(address))
+    if len(set(team_ips)) != len(team_ips):
+        raise ValueError("IP pattern assigned the same address to more than one team")
+    return team_ips
+
+
 def render_host(value, team_number, team_name, host_number_offset=0, team_ip=None):
     if not isinstance(value, str):
         return value
@@ -83,14 +102,20 @@ def render_host(value, team_number, team_name, host_number_offset=0, team_ip=Non
     return value
 
 
-def build_competition(source_data, count, template_team_name=None, host_number_offset=0, start_ip=None):
+def build_competition(
+    source_data, count, template_team_name=None, host_number_offset=0, start_ip=None, ip_pattern=None
+):
     """Return (generated config, credential rows, templated host count)."""
     if not isinstance(count, int) or isinstance(count, bool) or count < 1 or count > MAX_TEAMS:
         raise ValueError(f"team count must be between 1 and {MAX_TEAMS}")
     if not isinstance(host_number_offset, int) or isinstance(host_number_offset, bool):
         raise ValueError("host number offset must be an integer")
+    if start_ip is not None and ip_pattern is not None:
+        raise ValueError("use only one of start_ip and ip_pattern")
     team_ips = None
-    if start_ip is not None:
+    if ip_pattern is not None:
+        team_ips = team_ips_from_pattern(ip_pattern, count, host_number_offset)
+    elif start_ip is not None:
         try:
             first_ip = ipaddress.IPv4Address(start_ip)
         except ipaddress.AddressValueError as error:
@@ -478,6 +503,10 @@ def main(argv=None):
     parser.add_argument("count", nargs="?", type=int, help=f"number of Blue teams to generate (1-{MAX_TEAMS})")
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE, help="source competition YAML")
     parser.add_argument("--start-ip", help="starting IPv4 address; each team receives the next address")
+    parser.add_argument(
+        "--ip-pattern",
+        help="per-team IPv4 pattern, such as 192.168.{team_number}.2 (Team1 is 192.168.1.2, Team2 is 192.168.2.2)",
+    )
     parser.add_argument("--template-team", help="Blue team whose services are copied (default: first Blue team)")
     parser.add_argument(
         "--output-dir", type=Path, default=DEFAULT_OUTPUT, help=f"private output directory (default: {DEFAULT_OUTPUT})"
@@ -507,7 +536,7 @@ def main(argv=None):
     output_dir = args.output_dir if args.output_dir.is_absolute() else ROOT / args.output_dir
 
     if args.deploy_existing_salt:
-        if args.deploy_salt or args.count is not None or args.start_ip is not None:
+        if args.deploy_salt or args.count is not None or args.start_ip is not None or args.ip_pattern is not None:
             parser.error("--deploy-existing-salt cannot be combined with generation arguments")
         try:
             deployed_paths = deploy_salt_outputs(
@@ -527,15 +556,21 @@ def main(argv=None):
 
     if args.count is None:
         parser.error("count is required unless --deploy-existing-salt is used")
-    if args.start_ip is None:
-        parser.error("--start-ip is required unless --deploy-existing-salt is used")
+    if args.start_ip is None and args.ip_pattern is None:
+        parser.error("--start-ip or --ip-pattern is required unless --deploy-existing-salt is used")
+    if args.start_ip is not None and args.ip_pattern is not None:
+        parser.error("use only one of --start-ip and --ip-pattern")
 
     source_path = args.source if args.source.is_absolute() else Path.cwd() / args.source
     try:
         with source_path.open(encoding="utf-8") as source_file:
             source_data = yaml.safe_load(source_file)
         data, credentials, templated_host_count = build_competition(
-            source_data, args.count, args.template_team, start_ip=args.start_ip
+            source_data,
+            args.count,
+            args.template_team,
+            start_ip=args.start_ip,
+            ip_pattern=args.ip_pattern,
         )
         yaml_path, credentials_path = write_outputs(data, credentials, output_dir, args.force, flag_path=args.flag_path)
         salt_path = output_dir / "salt"
@@ -559,10 +594,16 @@ def main(argv=None):
         state_target_dir, pillar_target_dir, pillar_top_path = deployed_paths
         print(f"Installed Salt states in {state_target_dir} and team pillars in {pillar_target_dir}")
         print(f"Merged generated targets into {pillar_top_path} (owner/group {args.salt_user}:{args.salt_group})")
-    print(
-        f"Assigned {args.count} consecutive VM addresses from {args.start_ip} "
-        f"through {credentials[-1]['machine_ip']}."
-    )
+    if args.ip_pattern:
+        print(
+            f"Assigned {args.count} VM addresses from pattern {args.ip_pattern}: "
+            f"{credentials[0]['machine_ip']} through {credentials[-1]['machine_ip']}."
+        )
+    else:
+        print(
+            f"Assigned {args.count} consecutive VM addresses from {args.start_ip} "
+            f"through {credentials[-1]['machine_ip']}."
+        )
     if templated_host_count:
         print(f"Assigned per-team VM addresses to {templated_host_count} service host value(s).")
     if os.name != "posix":

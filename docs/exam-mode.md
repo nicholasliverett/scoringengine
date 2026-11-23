@@ -68,6 +68,14 @@ of teams:
 sudo python3 bin/generate_blue_teams.py 24 --start-ip 192.168.1.10 --deploy-salt
 ```
 
+When each team VM is `192.168.<team>.2` instead of the next address in one subnet, pass a pattern. Team1 gets `192.168.1.2`, Team2 gets `192.168.2.2`, and so on:
+
+```sh
+sudo python3 bin/generate_blue_teams.py 24 --ip-pattern '192.168.{team_number}.2' --deploy-salt
+```
+
+Use only one of `--start-ip` and `--ip-pattern`. The pattern must contain `{team_number}` or `{team_number_padded}`.
+
 Run this on the Salt master. `--deploy-salt` installs the state under
 `/srv/salt/practical_exam/`, the generated team pillars under
 `/srv/pillar/practical_exam/`, and merges the generated target entries into
