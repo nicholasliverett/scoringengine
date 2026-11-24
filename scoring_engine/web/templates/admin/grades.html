@@ -1,0 +1,113 @@
+{% extends 'admin/adminbase.html' %}
+{% block title %}Admin - Exam Grades{% endblock %}
+{% block header %}Exam Grades{% endblock %}
+{% block admincontent %}
+
+  <div class="chart-card mb-4">
+    <p class="text-muted">
+      Each team is graded out of 100. Attendance is earned once the team submits its exam flag.
+      The remaining points are split across the team's checks, with each threat worth twice
+      as much as each service. A check earns its points only while its latest result is Up.
+    </p>
+    <form id="attendance-form" role="form" class="row g-2 align-items-end">
+      <div class="col-auto">
+        <label class="form-label" for="attendance-points">Attendance points</label>
+        <input type="number" min="0" max="100" step="1" class="form-control" id="attendance-points" required>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-primary">Save Attendance</button>
+      </div>
+      <div class="col-12"><div id="attendance-msg" class="small mt-1" role="status"></div></div>
+    </form>
+    <div id="grade-split" class="mt-2"></div>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h5 class="mb-0">Team Results</h5>
+    <a href="/api/admin/exam/grades.csv" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-download"></i> Download CSV</a>
+  </div>
+  <p class="text-muted small">Blank means no check has finished yet for that team.</p>
+  <div class="chart-card" style="padding:0; overflow:auto;">
+    <table class="table table-sm table-bordered mb-0">
+      <thead id="grades-head"></thead>
+      <tbody id="grades-body"><tr><td class="text-muted">Loading</td></tr></tbody>
+    </table>
+  </div>
+
+<script>
+$(function () {
+  function describePoints(label, values) {
+    if (!values.length) { return null; }
+    if (values.length === 1) { return 'each ' + label + ' ' + values[0]; }
+    return label + 's ' + values[0] + ' to ' + values[values.length - 1];
+  }
+
+  function statusCell(value) {
+    var $cell = $('<td>').text(value);
+    if (value === 'Up') { $cell.addClass('text-success'); }
+    else if (value === 'Down') { $cell.addClass('text-danger'); }
+    return $cell;
+  }
+
+  function renderGrades(data) {
+    $('#attendance-points').val(data.attendance);
+    var parts = ['Attendance ' + data.attendance];
+    var threats = describePoints('threat', data.threat_points);
+    var services = describePoints('service', data.service_points);
+    if (threats) { parts.push(threats); }
+    if (services) { parts.push(services); }
+    var maxima = data.rows.map(function (row) { return row.total_max; });
+    if (maxima.length) { parts.push('max ' + Math.max.apply(null, maxima)); }
+    ScoringEngineUtils.setText(document.getElementById('grade-split'), parts.join(', ') + '.');
+
+    var $headRow = $('<tr>').append($('<th>').text('Team'), $('<th>').text('Attendance'));
+    data.columns.forEach(function (name) { $headRow.append($('<th>').text(name)); });
+    $headRow.append($('<th>').text('Total'));
+    $('#grades-head').empty().append($headRow);
+
+    var $body = $('#grades-body').empty();
+    if (!data.rows.length) {
+      $body.append($('<tr>').append($('<td>').attr('colspan', data.columns.length + 3)
+        .addClass('text-muted').text('No blue teams')));
+      return;
+    }
+    data.rows.forEach(function (row) {
+      var $tr = $('<tr>').append($('<td>').text(row.team), statusCell(row.attendance));
+      data.columns.forEach(function (name) { $tr.append(statusCell(row.checks[name] || '')); });
+      $tr.append($('<td>').text(row.total + ' / ' + row.total_max));
+      $body.append($tr);
+    });
+  }
+
+  function loadGrades() {
+    $.getJSON('/api/admin/exam/grades', renderGrades);
+  }
+
+  function showMsg(text, ok) {
+    $('#attendance-msg').removeClass('text-danger text-success')
+      .addClass(ok ? 'text-success' : 'text-danger').text(text);
+  }
+
+  $('#attendance-form').on('submit', function (e) {
+    e.preventDefault();
+    $('#attendance-msg').text('');
+    $.ajax({
+      url: '/api/admin/exam/attendance', method: 'POST', contentType: 'application/json',
+      data: JSON.stringify({ points: $('#attendance-points').val() }),
+      success: function () {
+        showMsg('Attendance saved.', true);
+        loadGrades();
+      },
+      error: function (xhr) {
+        var m = 'Save failed.'; try { m = xhr.responseJSON.error || m; } catch (err) {}
+        showMsg(m, false);
+      }
+    });
+  });
+
+  loadGrades();
+  ScoringEngineSSE.on('round_complete', loadGrades);
+});
+</script>
+{% endblock %}

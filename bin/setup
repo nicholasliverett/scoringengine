@@ -9,6 +9,7 @@ from scoring_engine.competition import Competition
 from scoring_engine.config import config
 from scoring_engine.db import db, delete_db, init_db, run_migrations, verify_db_ready
 from scoring_engine.engine.basic_check import CHECK_FAILURE_TEXT, CHECK_SUCCESS_TEXT, CHECK_TIMED_OUT_TEXT
+from scoring_engine.exam_grades import ATTENDANCE_SETTING, clamp_attendance
 from scoring_engine.logger import logger
 from scoring_engine.models.check import Check
 from scoring_engine.models.flag import Flag, FlagTypeEnum, Perm, Platform, Solve
@@ -228,6 +229,11 @@ with app.app_context():
 
     # Wall-clock scoreboard freeze (empty = not frozen; set at runtime by white team)
     db.session.add(Setting(name="scoreboard_freeze_time", value=""))
+
+    # Practical exam attendance credit, out of 100 (set at runtime on Admin, Exam Grades)
+    db.session.add(
+        Setting(name=ATTENDANCE_SETTING, value=str(clamp_attendance(config.exam_participation_points)))
+    )
 
     db.session.commit()
 

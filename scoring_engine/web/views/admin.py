@@ -191,6 +191,16 @@ def adjustments():
         return redirect(url_for("auth.unauthorized"))
 
 
+@mod.route("/admin/grades")
+@login_required
+def grades():
+    if current_user.is_white_team:
+        blue_teams = Team.get_all_blue_teams()
+        return render_template("admin/grades.html", blue_teams=blue_teams)
+    else:
+        return redirect(url_for("auth.unauthorized"))
+
+
 @mod.route("/admin/welcome")
 @login_required
 def welcome():

@@ -26,30 +26,49 @@ label and score category:
 
 The default is `finding`, which keeps existing configurations anonymous. The
 overview shows earned/max points for the total, each category, and every check;
-the total includes the configured attendance credit.
+the total includes the attendance credit.
 
-## Service scoring for the practical exam
+## Exam grade out of 100
 
-Each service contributes its configured point value once while its latest
-completed check passes. A failed check immediately changes that service to zero;
-a later pass restores its configured points. Repeated passing rounds do not add
-points. Dynamic scoring multipliers and SLA failure penalties remain available
-as status information, but do not change service score totals. Inject and manual
-adjustment points continue to be added separately.
+The Blue overview and the white-team grade sheet use the same grade:
+
+- Attendance is earned once the team submits its exam flag.
+- The other `100 - attendance` points are split across that team's checks. Each
+  threat (`finding` or `threat`) counts twice as much as each named service
+  (`name`). With attendance at 50, four threats, and SSH plus HTTP, each threat
+  is 10 points and each service is 5.
+- When the split does not divide evenly, the leftover points go to the earliest
+  checks, so the total is still exactly 100.
+- A check earns its points only while its latest completed result passes. A
+  failed or not-yet-run check earns 0; a later pass restores its points.
+
+The `points` value on each service in `competition.yaml` does not change the
+exam grade. It still drives the white-team scoreboard, along with inject and
+manual adjustment points, which are not part of the exam grade.
 
 Threat-hunting checks should pass when the machine is in the expected clean
 state. For example, a check for an unauthorized SSH key should pass when that
 key is absent and fail while it exists. Availability checks for SSH or a website
-should pass while the service is reachable. Both use the same up/down scoring
-rule, with the configured service points controlling the value at stake.
+should pass while the service is reachable.
 
-## Configure attendance credit
+## Grade sheet and attendance
 
-The default is 100 points. Set `exam_participation_points` under `[OPTIONS]` in
-`engine.conf` (or set `SCORINGENGINE_EXAM_PARTICIPATION_POINTS`) to change it.
-Non-positive values are treated as zero. When deploying this fork to an existing
-installation, rebuild and start the Compose stack so bootstrap applies pending
-database migrations before the web and engine containers start:
+White team can open Admin, Exam Grades. It lists every Blue team with
+attendance and each check by its real name as `Up`, `Down`, or blank when no
+check has finished, plus the total out of 100. **Download CSV** exports that
+same grid.
+
+Set attendance (0 to 100) on that page. Saving it changes the split for every
+team and updates the credit already awarded to teams that have logged in.
+
+A new database starts with `exam_participation_points` from `[OPTIONS]` in
+`engine.conf` (or `SCORINGENGINE_EXAM_PARTICIPATION_POINTS`), 100 by default and
+limited to 0 to 100. Once saved on the admin page, that value wins over the
+config file.
+
+When deploying this fork to an existing installation, rebuild and start the
+Compose stack so bootstrap applies pending database migrations before the web
+and engine containers start:
 
 ```sh
 docker compose up -d --build

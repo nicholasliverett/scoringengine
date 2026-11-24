@@ -53,10 +53,12 @@ def test_flag_login_reuses_credential_but_awards_once(test_client, db_session):
 
 def test_exam_stats_show_configured_labels_and_latest_check_scores(blue_login, db_session):
     from tests.scoring_engine.factories import make_check, make_round
+    from scoring_engine.exam_grades import set_attendance_points
     from scoring_engine.scores import materialize_round
 
     client, teams = blue_login
     team = teams["blue_team"]
+    set_attendance_points(db.session, 50)
     service = Service(
         name="Sensitive SSH Check", exam_display="name", team=team, check_name="SSHCheck", host="exam-host", points=125
     )
@@ -81,17 +83,19 @@ def test_exam_stats_show_configured_labels_and_latest_check_scores(blue_login, d
     assert response.status_code == 200
     data = response.get_json()
     assert "rounds" not in data
-    assert data["service"] == 125
-    assert data["total"] == 125
-    assert data["service_points"] == {"earned": 125, "max": 125}
-    assert data["threat_points"] == {"earned": 0, "max": 55}
-    assert data["total_max"] == 280
+    # Attendance 50 leaves 50 for one service (weight 1) and two threats (weight 2 each).
+    assert data["total"] == 10
+    assert data["participation_points"] == 0
+    assert data["attendance_max"] == 50
+    assert data["service_points"] == {"earned": 10, "max": 10}
+    assert data["threat_points"] == {"earned": 0, "max": 40}
+    assert data["total_max"] == 100
     assert data["findings_passing"] == 1
     assert [(row["name"], row["category"], row["passing"], row["points_earned"], row["points_max"])
             for row in data["findings"]] == [
-        ("Sensitive SSH Check", "service", True, 125, 125),
-        ("Threat 1", "threat", False, 0, 25),
-        ("Finding 1", "threat", None, 0, 30),
+        ("Sensitive SSH Check", "service", True, 10, 10),
+        ("Threat 1", "threat", False, 0, 20),
+        ("Finding 1", "threat", None, 0, 20),
     ]
     response_text = response.get_data(as_text=True)
     assert "Sensitive Beacon Check" not in response_text

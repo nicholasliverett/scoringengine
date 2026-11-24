@@ -11,8 +11,8 @@ from sqlalchemy.orm.exc import NoResultFound
 from wtforms import BooleanField, PasswordField, StringField
 from wtforms.validators import InputRequired
 
-from scoring_engine.config import config
 from scoring_engine.db import db
+from scoring_engine.exam_grades import get_attendance_points
 from scoring_engine.models.exam_credential import ExamCredential, ExamParticipation
 from scoring_engine.models.score_adjustment import ScoreAdjustment
 from scoring_engine.models.user import User
@@ -94,7 +94,7 @@ def _record_exam_participation_once(team_id):
                 return
             adjustment = ScoreAdjustment(
                 team_id=team_id,
-                points=max(0, int(config.exam_participation_points)),
+                points=get_attendance_points(),
                 reason="Exam participation",
                 author_id=None,
             )

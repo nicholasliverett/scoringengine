@@ -1,141 +1,74 @@
-"""Private exam score views and white-team flag provisioning."""
+"""Private exam score views, white-team grade sheet, and flag provisioning."""
 
+import csv
 import hashlib
+import io
 import re
 
-from flask import jsonify, request
+from flask import Response, jsonify, request
 from flask_login import current_user, login_required
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.sql import func
 
-from scoring_engine.config import config
 from scoring_engine.db import db
-from scoring_engine.models.check import Check
+from scoring_engine.exam_grades import TOTAL_POINTS, grade_sheet, set_attendance_points, team_grades
 from scoring_engine.models.exam_credential import ExamCredential
-from scoring_engine.models.service import Service
-from scoring_engine.models.setting import Setting
 from scoring_engine.models.team import Team
 from scoring_engine.models.user import User
-from scoring_engine.sla import get_sla_config
 
 from . import mod
 
 
-def _own_score(team_id):
-    from scoring_engine.scores import team_adjustment_totals, team_service_scores
-
-    scoring = get_sla_config()
-    service = team_service_scores(db.session, scoring).get(team_id, 0)
-    adjustment = team_adjustment_totals(db.session).get(team_id, 0)
-
-    inject = 0
-    visible = Setting.get_setting("inject_scores_visible")
-    if visible and visible.value:
-        from sqlalchemy.sql import func
-
-        from scoring_engine.models.inject import Inject, InjectRubricScore
-
-        inject = db.session.query(func.coalesce(func.sum(InjectRubricScore.score), 0)).join(Inject).filter(
-            Inject.team_id == team_id, Inject.status == "Graded"
-        ).scalar() or 0
-
-    if scoring.weighted_scoring_enabled:
-        inject = int(round(inject * scoring.inject_weight))
-    total = service + inject + adjustment
-    if not scoring.allow_negative:
-        total = max(0, total)
-    return {"total": int(total), "service": int(service), "inject": int(inject),
-            "adjustments": int(adjustment), "sla_penalty": 0}
+def _finding_guidance(category, passing, port):
+    if passing is None:
+        return "The engine has not completed a check yet."
+    if passing:
+        if category == "service":
+            return "The service passed its availability check."
+        return "The check did not detect the threat condition."
+    if category == "service":
+        port_text = f" on port {port}" if port else ""
+        return f"The service check failed. Verify it is running and reachable{port_text}."
+    return "The threat condition is still present; remove it before the next check."
 
 
-def _own_findings(team_id):
-    """Return latest check status and score breakdown for one team's services."""
-    latest_checks = (
-        db.session.query(Check.service_id, func.max(Check.id).label("check_id"))
-        .filter(Check.completed.is_(True))
-        .group_by(Check.service_id)
-        .subquery()
-    )
-    rows = (
-        db.session.query(Service.name, Service.exam_display, Service.port, Service.points, Check.result)
-        .select_from(Service)
-        .outerjoin(latest_checks, latest_checks.c.service_id == Service.id)
-        .outerjoin(Check, Check.id == latest_checks.c.check_id)
-        .filter(Service.team_id == team_id)
-        .order_by(Service.id)
-        .all()
-    )
+def _own_exam_summary(team_id):
+    grade = team_grades(db.session, [team_id])[team_id]
     label_counts = {"finding": 0, "threat": 0}
-    score_totals = {
+    category_scores = {
         "service": {"earned": 0, "max": 0},
         "threat": {"earned": 0, "max": 0},
     }
     findings = []
-    for service_name, exam_display, port, service_points, result in rows:
-        if exam_display not in label_counts and exam_display != "name":
-            exam_display = "finding"
-
-        category = "service" if exam_display == "name" else "threat"
-        category_label = "Service" if category == "service" else "Threat"
-        if exam_display == "name":
-            label = service_name
+    for check in grade["checks"]:
+        category = check["category"]
+        if check["exam_display"] == "name":
+            label = check["name"]
         else:
-            label_counts[exam_display] += 1
-            label = f"{exam_display.title()} {label_counts[exam_display]}"
-
-        passing = None if result is None else bool(result)
-        if passing is None:
-            guidance = "The engine has not completed a check yet."
-        elif passing:
-            guidance = (
-                "The service passed its availability check."
-                if category == "service"
-                else "The check did not detect the threat condition."
-            )
-        elif category == "service":
-            port_text = f" on port {port}" if port else ""
-            guidance = f"The service check failed. Verify it is running and reachable{port_text}."
-        else:
-            guidance = "The threat condition is still present; remove it before the next check."
-
-        maximum = max(0, int(service_points or 0))
-        earned = maximum if passing is True else 0
-        score_totals[category]["max"] += maximum
-        score_totals[category]["earned"] += earned
+            label_counts[check["exam_display"]] += 1
+            label = f"{check['exam_display'].title()} {label_counts[check['exam_display']]}"
+        category_scores[category]["max"] += check["points_max"]
+        category_scores[category]["earned"] += check["points_earned"]
         findings.append(
             {
                 "name": label,
                 "category": category,
-                "category_label": category_label,
-                "passing": passing,
-                "points_earned": earned,
-                "points_max": maximum,
-                "guidance": guidance,
+                "category_label": "Service" if category == "service" else "Threat",
+                "passing": check["passing"],
+                "points_earned": check["points_earned"],
+                "points_max": check["points_max"],
+                "guidance": _finding_guidance(category, check["passing"], check["port"]),
             }
         )
-    return findings, sum(finding["passing"] is True for finding in findings), score_totals
-
-
-def _own_exam_summary(team_id):
-    from scoring_engine.models.exam_credential import ExamParticipation
-
-    points = _own_score(team_id)
-    participation = db.session.query(ExamParticipation).filter_by(team_id=team_id).one_or_none()
-    participation_points = int(participation.score_adjustment.points) if participation else 0
-    findings, passing, category_scores = _own_findings(team_id)
-    attendance_max = max(0, int(config.exam_participation_points))
-    points.update(
-        {
-            "participation_points": participation_points,
-            "attendance_max": attendance_max,
-            "total_max": category_scores["service"]["max"] + category_scores["threat"]["max"] + attendance_max,
-            "service_points": category_scores["service"],
-            "threat_points": category_scores["threat"],
-            "findings": findings,
-            "findings_passing": passing,
-        }
-    )
-    return points
+    return {
+        "total": grade["total"],
+        "total_max": grade["total_max"],
+        "participation_points": grade["attendance"]["points_earned"],
+        "attendance_max": grade["attendance"]["points_max"],
+        "service_points": category_scores["service"],
+        "threat_points": category_scores["threat"],
+        "findings": findings,
+        "findings_passing": sum(finding["passing"] is True for finding in findings),
+    }
 
 
 @mod.route("/api/exam/summary")
@@ -152,6 +85,76 @@ def exam_stats():
     if not current_user.is_blue_team:
         return jsonify({"error": "forbidden"}), 403
     return jsonify(_own_exam_summary(current_user.team_id))
+
+
+@mod.route("/api/admin/exam/grades")
+@login_required
+def admin_exam_grades():
+    if not current_user.is_white_team:
+        return jsonify({"error": "forbidden"}), 403
+    return jsonify(grade_sheet(db.session))
+
+
+def _csv_cell(value):
+    # Spreadsheet apps run cells that start with these characters as formulas.
+    text = str(value)
+    if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + text
+    return text
+
+
+@mod.route("/api/admin/exam/grades.csv")
+@login_required
+def admin_exam_grades_csv():
+    if not current_user.is_white_team:
+        return jsonify({"error": "forbidden"}), 403
+    sheet = grade_sheet(db.session)
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer)
+    writer.writerow(["Team", "Attendance", *[_csv_cell(name) for name in sheet["columns"]], "Total", "Max"])
+    for row in sheet["rows"]:
+        writer.writerow(
+            [
+                _csv_cell(row["team"]),
+                row["attendance"],
+                *[row["checks"].get(name, "") for name in sheet["columns"]],
+                row["total"],
+                row["total_max"],
+            ]
+        )
+    return Response(
+        buffer.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=exam-grades.csv"},
+    )
+
+
+@mod.route("/api/admin/exam/attendance", methods=["POST"])
+@login_required
+def admin_set_exam_attendance():
+    if not current_user.is_white_team:
+        return jsonify({"error": "forbidden"}), 403
+    payload = request.get_json(silent=True) or {}
+    raw = payload.get("points")
+    if isinstance(raw, bool):
+        raw = None
+    try:
+        points = int(raw)
+    except (TypeError, ValueError):
+        points = None
+    if points is None or str(raw).strip() != str(points) or not 0 <= points <= TOTAL_POINTS:
+        return jsonify({"error": f"points must be a whole number from 0 to {TOTAL_POINTS}"}), 400
+
+    saved = set_attendance_points(db.session, points)
+
+    from scoring_engine.cache_helper import update_overview_data, update_scoreboard_data, update_stats
+    from scoring_engine.events import publish_event
+
+    update_overview_data()
+    update_scoreboard_data()
+    update_stats()
+    publish_event("settings_changed", {"setting": "exam_participation_points"})
+    return jsonify({"attendance": saved})
 
 
 @mod.route("/api/admin/exam/credentials", methods=["POST"])
