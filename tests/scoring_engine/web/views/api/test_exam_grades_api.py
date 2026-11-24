@@ -80,14 +80,14 @@ class TestExamGradesWhite:
 
         assert data["attendance"] == 70
         assert data["columns"] == ["SSH", "=Rogue Key"]
-        assert data["threat_points"] == [20]
-        assert data["service_points"] == [10]
+        assert data["threat_points"] == [30]
+        assert data["service_penalties"] == [15]
         assert data["rows"] == [
             {
                 "team": "Blue Team",
                 "attendance": "Up",
                 "checks": {"SSH": "Down", "=Rogue Key": ""},
-                "total": 70,
+                "total": 55,
                 "total_max": 100,
             }
         ]
@@ -105,7 +105,7 @@ class TestExamGradesWhite:
         rows = list(csv.reader(io.StringIO(response.get_data(as_text=True))))
         assert rows == [
             ["Team", "Attendance", "SSH", "'=Rogue Key", "Total", "Max"],
-            ["Blue Team", "Up", "Down", "Up", "90", "100"],
+            ["Blue Team", "Up", "Down", "Up", "85", "100"],
         ]
 
     def test_saving_attendance_updates_existing_award(self):

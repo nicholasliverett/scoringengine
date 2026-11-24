@@ -6,7 +6,7 @@
     <div class="page-title-bar"><h1 class="page-title">Overview</h1></div>
     <div class="stat-cards-row">
         <div class="stat-card"><div class="stat-label">Total points</div><div class="stat-value" id="exam-total">—</div></div>
-        <div class="stat-card"><div class="stat-label">Service check points</div><div class="stat-value" id="exam-service">—</div></div>
+        <div class="stat-card"><div class="stat-label">Service penalties</div><div class="stat-value" id="exam-service">—</div></div>
         <div class="stat-card"><div class="stat-label">Threat check points</div><div class="stat-value" id="exam-threat">—</div></div>
     </div>
     <div id="exam-next-check" class="text-muted mb-3" role="status">Loading engine check schedule…</div>
@@ -14,7 +14,7 @@
     <div class="text-muted mb-3">
         <div><strong>Service checks:</strong> Pass means the service is responding; fail means it may be stopped or unreachable.</div>
         <div><strong>Threat checks:</strong> Pass means the threat condition is gone; fail means it is still present.</div>
-        <div>Points show earned out of the maximum for each check. Results update after the next completed engine check.</div>
+        <div>Threat points show earned out of the maximum. A service that is down subtracts its penalty from your total. Results update after the next completed engine check.</div>
     </div>
     <div class="chart-card" style="padding:0; overflow:hidden;">
         <table class="table table-sm overview-matrix mb-0">
@@ -74,7 +74,7 @@
             return Number(earned || 0).toLocaleString() + ' / ' + Number(maximum || 0).toLocaleString();
           }
           $('#exam-total').text(formatScore(data.total, data.total_max));
-          $('#exam-service').text(formatScore(data.service_points.earned, data.service_points.max));
+          $('#exam-service').text(Number(data.service_points.earned || 0).toLocaleString());
           $('#exam-threat').text(formatScore(data.threat_points.earned, data.threat_points.max));
 
           var findings = data.findings || [];
@@ -98,7 +98,9 @@
               .append($('<td>').text(finding.category_label))
               .append($('<td>').text(finding.name))
               .append($('<td>').append($status))
-              .append($('<td>').text(formatScore(finding.points_earned, finding.points_max))));
+              .append($('<td>').text(finding.category === 'service'
+                ? Number(finding.points_earned || 0).toLocaleString() + ' (−' + Number(finding.penalty || 0).toLocaleString() + ' when down)'
+                : formatScore(finding.points_earned, finding.points_max))));
           });
         });
       }

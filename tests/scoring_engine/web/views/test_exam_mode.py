@@ -83,20 +83,22 @@ def test_exam_stats_show_configured_labels_and_latest_check_scores(blue_login, d
     assert response.status_code == 200
     data = response.get_json()
     assert "rounds" not in data
-    # Attendance 50 leaves 50 for one service (weight 1) and two threats (weight 2 each).
-    assert data["total"] == 10
+    # Attendance 50 leaves 25 for each of the two threats; a down service would cost 13.
+    assert data["total"] == 0
     assert data["participation_points"] == 0
     assert data["attendance_max"] == 50
-    assert data["service_points"] == {"earned": 10, "max": 10}
-    assert data["threat_points"] == {"earned": 0, "max": 40}
+    assert data["service_points"] == {"earned": 0, "max": 0}
+    assert data["threat_points"] == {"earned": 0, "max": 50}
     assert data["total_max"] == 100
     assert data["findings_passing"] == 1
     assert [(row["name"], row["category"], row["passing"], row["points_earned"], row["points_max"])
             for row in data["findings"]] == [
-        ("Sensitive SSH Check", "service", True, 10, 10),
-        ("Threat 1", "threat", False, 0, 20),
-        ("Finding 1", "threat", None, 0, 20),
+        ("Sensitive SSH Check", "service", True, 0, 0),
+        ("Threat 1", "threat", False, 0, 25),
+        ("Finding 1", "threat", None, 0, 25),
     ]
+    assert data["findings"][0]["penalty"] == 13
+    assert "penalty" not in data["findings"][1]
     response_text = response.get_data(as_text=True)
     assert "Sensitive Beacon Check" not in response_text
     assert "Sensitive User Check" not in response_text

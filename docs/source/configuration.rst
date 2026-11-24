@@ -124,8 +124,8 @@ named availability services:
 
 Use these values:
 
-* ``name`` displays the configured service name and counts points as Service
-  check points.
+* ``name`` displays the configured service name and makes it a service
+  penalty: it earns nothing, and subtracts half of a threat while it is down.
 * ``finding`` displays an anonymous ``Finding N`` label and counts points as
   Threat check points. This is the default when the field is omitted.
 * ``threat`` displays an anonymous ``Threat N`` label and also counts points

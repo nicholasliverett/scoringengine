@@ -18,29 +18,33 @@ continue to operate on the server.
 Set `exam_display` on each service in `competition.yaml` to control its overview
 label and score category:
 
-- `name` shows the configured service name and counts its points under Services.
+- `name` shows the configured service name and makes it a service penalty.
 - `finding` shows an anonymous `Finding N` label and counts its points under
   Threats.
 - `threat` shows an anonymous `Threat N` label and counts its points under
   Threats.
 
 The default is `finding`, which keeps existing configurations anonymous. The
-overview shows earned/max points for the total, each category, and every check;
-the total includes the attendance credit.
+overview shows earned/max points for the total and each threat, and the points
+currently lost to down services; the total includes the attendance credit.
 
 ## Exam grade out of 100
 
 The Blue overview and the white-team grade sheet use the same grade:
 
 - Attendance is earned once the team submits its exam flag.
-- The other `100 - attendance` points are split across that team's checks. Each
-  threat (`finding` or `threat`) counts twice as much as each named service
-  (`name`). With attendance at 50, four threats, and SSH plus HTTP, each threat
-  is 10 points and each service is 5.
-- When the split does not divide evenly, the leftover points go to the earliest
-  checks, so the total is still exactly 100.
-- A check earns its points only while its latest completed result passes. A
-  failed or not-yet-run check earns 0; a later pass restores its points.
+- The other `100 - attendance` points are split evenly across that team's
+  threats (`finding` or `threat`). A threat earns its share only while its
+  latest completed result passes. A failed or not-yet-run threat earns 0; a
+  later pass restores its points. When the split does not divide evenly, the
+  earliest threats get one extra point, so the maximum is still exactly 100.
+- Named services (`name`, such as SSH and HTTP) add nothing. Each one subtracts
+  half of a threat's share while its latest completed result is down, rounded
+  half up. A service that passes or has not been checked yet subtracts nothing.
+- Totals never go below 0.
+
+With attendance at 50 and five threats, each threat is 10 points and SSH or HTTP
+being down costs 5 each.
 
 The `points` value on each service in `competition.yaml` does not change the
 exam grade. It still drives the white-team scoreboard, along with inject and

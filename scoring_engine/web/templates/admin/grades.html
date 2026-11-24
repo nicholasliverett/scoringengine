@@ -6,8 +6,9 @@
   <div class="chart-card mb-4">
     <p class="text-muted">
       Each team is graded out of 100. Attendance is earned once the team submits its exam flag.
-      The remaining points are split across the team's checks, with each threat worth twice
-      as much as each service. A check earns its points only while its latest result is Up.
+      The remaining points are split evenly across the team's threats, and a threat earns its
+      points only while its latest result is Up. Services add nothing: each one subtracts half
+      of a threat while its latest result is Down. Totals never go below 0.
     </p>
     <form id="attendance-form" role="form" class="row g-2 align-items-end">
       <div class="col-auto">
@@ -54,9 +55,10 @@ $(function () {
     $('#attendance-points').val(data.attendance);
     var parts = ['Attendance ' + data.attendance];
     var threats = describePoints('threat', data.threat_points);
-    var services = describePoints('service', data.service_points);
+    var penalties = data.service_penalties.map(function (p) { return '-' + p; });
+    var services = describePoints('service', penalties);
     if (threats) { parts.push(threats); }
-    if (services) { parts.push(services); }
+    if (services) { parts.push(services + ' when down'); }
     var maxima = data.rows.map(function (row) { return row.total_max; });
     if (maxima.length) { parts.push('max ' + Math.max.apply(null, maxima)); }
     ScoringEngineUtils.setText(document.getElementById('grade-split'), parts.join(', ') + '.');

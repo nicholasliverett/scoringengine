@@ -48,17 +48,18 @@ def _own_exam_summary(team_id):
             label = f"{check['exam_display'].title()} {label_counts[check['exam_display']]}"
         category_scores[category]["max"] += check["points_max"]
         category_scores[category]["earned"] += check["points_earned"]
-        findings.append(
-            {
-                "name": label,
-                "category": category,
-                "category_label": "Service" if category == "service" else "Threat",
-                "passing": check["passing"],
-                "points_earned": check["points_earned"],
-                "points_max": check["points_max"],
-                "guidance": _finding_guidance(category, check["passing"], check["port"]),
-            }
-        )
+        finding = {
+            "name": label,
+            "category": category,
+            "category_label": "Service" if category == "service" else "Threat",
+            "passing": check["passing"],
+            "points_earned": check["points_earned"],
+            "points_max": check["points_max"],
+            "guidance": _finding_guidance(category, check["passing"], check["port"]),
+        }
+        if category == "service":
+            finding["penalty"] = check["penalty"]
+        findings.append(finding)
     return {
         "total": grade["total"],
         "total_max": grade["total_max"],

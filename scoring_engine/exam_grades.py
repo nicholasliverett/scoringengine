@@ -1,9 +1,10 @@
 """Practical exam grades: attendance plus up/down checks, scored out of 100.
 
 Attendance is a white-team setting. The remaining ``100 - attendance`` points
-are split across a team's checks, with each threat weighted twice as much as
-each named service. A check earns its share only while its latest completed
-result passes.
+are split evenly across a team's threat checks; a threat earns its share only
+while its latest completed result passes. Named services (SSH, HTTP) add
+nothing: each one subtracts half of a threat's share while its latest result is
+down. Totals never go below zero.
 """
 
 from sqlalchemy import select
@@ -19,8 +20,6 @@ from scoring_engine.models.team import Team
 
 ATTENDANCE_SETTING = "exam_participation_points"
 TOTAL_POINTS = 100
-SERVICE_WEIGHT = 1
-THREAT_WEIGHT = 2
 
 
 def clamp_attendance(value):
@@ -41,24 +40,25 @@ def check_category(exam_display):
     return "service" if exam_display == "name" else "threat"
 
 
-def split_check_points(attendance, categories):
-    """Split ``TOTAL_POINTS - attendance`` across checks, in order.
+def split_threat_points(attendance, threat_count):
+    """Split ``TOTAL_POINTS - attendance`` evenly across threats, in order.
 
-    Uses largest-remainder rounding, so the integer shares always add up to the
-    remaining points. Ties go to the earlier check.
+    When it does not divide evenly the earliest threats get one extra point, so
+    the shares always add up to the remaining points.
     """
     remaining = TOTAL_POINTS - clamp_attendance(attendance)
-    weights = [SERVICE_WEIGHT if category == "service" else THREAT_WEIGHT for category in categories]
-    total_weight = sum(weights)
-    if total_weight == 0 or remaining <= 0:
-        return [0] * len(weights)
-    numerators = [remaining * weight for weight in weights]
-    points = [numerator // total_weight for numerator in numerators]
-    leftover = remaining - sum(points)
-    by_remainder = sorted(range(len(weights)), key=lambda index: (-(numerators[index] % total_weight), index))
-    for index in by_remainder[:leftover]:
-        points[index] += 1
-    return points
+    if threat_count <= 0:
+        return []
+    base, leftover = divmod(remaining, threat_count)
+    return [base + 1 if index < leftover else base for index in range(threat_count)]
+
+
+def service_penalty(attendance, threat_count):
+    """Points a down service subtracts: half of an even threat share, rounded half up."""
+    remaining = TOTAL_POINTS - clamp_attendance(attendance)
+    if threat_count <= 0:
+        return 0
+    return (remaining + threat_count) // (2 * threat_count)
 
 
 def _latest_check_rows(session, team_ids):
@@ -84,7 +84,9 @@ def team_grades(session, team_ids):
 
     Each grade has ``attendance`` (``present``, ``points_earned``, ``points_max``),
     ``checks`` in service order, ``total``, and ``total_max``. A check's
-    ``passing`` is True, False, or None when no check has completed.
+    ``passing`` is True, False, or None when no check has completed. Services
+    have ``points_max`` 0, a ``penalty``, and ``points_earned`` of ``-penalty``
+    while down.
     """
     team_ids = list(team_ids)
     if not team_ids:
@@ -113,15 +115,21 @@ def team_grades(session, team_ids):
     grades = {}
     for team_id in team_ids:
         checks = checks_by_team[team_id]
-        shares = split_check_points(attendance, [check["category"] for check in checks])
-        for check, share in zip(checks, shares):
+        threats = [check for check in checks if check["category"] == "threat"]
+        penalty = service_penalty(attendance, len(threats))
+        for check, share in zip(threats, split_threat_points(attendance, len(threats))):
             check["points_max"] = share
             check["points_earned"] = share if check["passing"] is True else 0
+        for check in checks:
+            if check["category"] == "service":
+                check["points_max"] = 0
+                check["penalty"] = penalty
+                check["points_earned"] = -penalty if check["passing"] is False else 0
         attendance_earned = attendance if team_id in present else 0
         grades[team_id] = {
             "attendance": {"present": team_id in present, "points_earned": attendance_earned, "points_max": attendance},
             "checks": checks,
-            "total": attendance_earned + sum(check["points_earned"] for check in checks),
+            "total": max(0, attendance_earned + sum(check["points_earned"] for check in checks)),
             "total_max": attendance + sum(check["points_max"] for check in checks),
         }
     return grades
@@ -146,13 +154,16 @@ def grade_sheet(session):
 
     rows = []
     threat_shares = set()
-    service_shares = set()
+    service_penalties = set()
     for team in teams:
         grade = grades[team.id]
         values = {}
         for check in grade["checks"]:
             values[check["name"]] = _up_down(check["passing"])
-            (service_shares if check["category"] == "service" else threat_shares).add(check["points_max"])
+            if check["category"] == "service":
+                service_penalties.add(check["penalty"])
+            else:
+                threat_shares.add(check["points_max"])
         rows.append(
             {
                 "team": team.name,
@@ -166,7 +177,7 @@ def grade_sheet(session):
     return {
         "attendance": get_attendance_points(),
         "threat_points": sorted(threat_shares),
-        "service_points": sorted(service_shares),
+        "service_penalties": sorted(service_penalties),
         "columns": columns,
         "rows": rows,
     }
